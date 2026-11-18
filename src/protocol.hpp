@@ -23,6 +23,7 @@ inline constexpr const char* kAudioSinkUuid = "0000110b-0000-1000-8000-00805f9b3
 enum class DeviceProtocol : uint8_t {
     VivoGaia = 0,
     RealmeOppoTl = 1,
+    HuaweiSpp = 2,
 };
 
 inline constexpr uint8_t kPreamble = 0xFF;

@@ -105,15 +105,18 @@ void printStatusHuman(const QJsonObject& data) {
     const QString mac = data.value(QStringLiteral("device_mac")).toString();
     const QString fw = data.value(QStringLiteral("firmware")).toString(QStringLiteral("—"));
 
-    const bool isVivoProto = (data.value(QStringLiteral("protocol")).toString(QStringLiteral("vivo_gaia")) == u"vivo_gaia");
+    const QString protoStr = data.value(QStringLiteral("protocol")).toString(QStringLiteral("vivo_gaia"));
+    const bool hasSubModes = (protoStr == u"vivo_gaia" || protoStr == u"huawei_spp");
     QString mode = QStringLiteral("—");
     if (auto nm = kalm::parseNoiseModeStr(data.value(QStringLiteral("noise_mode")).toString())) {
         mode = kalm::noiseModeLabel(*nm);
-        if (isVivoProto && *nm == kalm::NoiseMode::Anc && !data.value(QStringLiteral("anc_level")).isNull()) {
-            const QString sub = kalm::ancLevelLabel(data.value(QStringLiteral("anc_level")).toInt());
+        if (hasSubModes && *nm == kalm::NoiseMode::Anc && !data.value(QStringLiteral("anc_level")).isNull()) {
+            QString sub = data.value(QStringLiteral("anc_level_label")).toString();
+            if (sub.isEmpty()) sub = kalm::ancLevelLabel(data.value(QStringLiteral("anc_level")).toInt());
             if (!sub.isEmpty()) mode += QStringLiteral(" (%1)").arg(sub);
-        } else if (isVivoProto && *nm == kalm::NoiseMode::Transparency && !data.value(QStringLiteral("transparency_effect")).isNull()) {
-            const QString sub = kalm::transparencyLabel(data.value(QStringLiteral("transparency_effect")).toInt());
+        } else if (hasSubModes && *nm == kalm::NoiseMode::Transparency && !data.value(QStringLiteral("transparency_effect")).isNull()) {
+            QString sub = data.value(QStringLiteral("transparency_effect_label")).toString();
+            if (sub.isEmpty()) sub = kalm::transparencyLabel(data.value(QStringLiteral("transparency_effect")).toInt());
             if (!sub.isEmpty()) mode += QStringLiteral(" (%1)").arg(sub);
         }
     }
@@ -146,7 +149,8 @@ void printStatusHuman(const QJsonObject& data) {
         << wearCliLabel(wear.value(QStringLiteral("right")).toString()) << "\n";
 
     if (!data.value(QStringLiteral("audio_effect")).isNull()) {
-        const QString eq = kalm::audioEffectLabel(data.value(QStringLiteral("audio_effect")).toInt());
+        QString eq = data.value(QStringLiteral("audio_effect_label")).toString();
+        if (eq.isEmpty()) eq = kalm::audioEffectLabel(data.value(QStringLiteral("audio_effect")).toInt());
         if (!eq.isEmpty()) out << padLabel(kalm::trKey("cli_sound")) << " " << eq << "\n";
     }
 
@@ -195,6 +199,19 @@ QString battSummaryShort(const QJsonObject& data) {
         parts.append(QStringLiteral("%1 %2%").arg(kalm::trKey("batt_case")).arg(b.value(QStringLiteral("case")).toInt()));
     }
     return parts.join(QStringLiteral(" · "));
+}
+
+bool isHuaweiCliTarget(kalm::DeviceRegistry& reg, const QString& query) {
+    if (!query.trimmed().isEmpty()) {
+        if (auto resolved = reg.resolveQuery(query)) {
+            return kalm::huawei::matchesName(resolved->name);
+        }
+        return false;
+    }
+    if (auto active = reg.getActive()) {
+        return kalm::huawei::matchesName(active->name);
+    }
+    return false;
 }
 
 std::optional<int> parseEqPreset(const QString& raw) {
@@ -392,7 +409,9 @@ int handleDevicesSubcmd(const QStringList& rest) {
         for (const auto& s : reg.devices()) saved.insert(s.mac);
         out << kalm::trKey("cli_bt_header") << "\n";
         for (const auto& b : found) {
-            const QString tag = b.isVivoTws() ? QStringLiteral("vivo/iQOO GAIA") : QStringLiteral("Bluetooth Audio");
+            const QString tag = b.isHuaweiTws() ? QStringLiteral("HUAWEI FreeBuds")
+                              : (b.isVivoTws() ? QStringLiteral("vivo/iQOO GAIA")
+                              : (b.isRealmeOppoTws() ? QStringLiteral("realme/OPPO") : QStringLiteral("Bluetooth Audio")));
             const QString conn = b.connected ? kalm::trKey("status_connected") : kalm::trKey("status_disconnected");
             const QString sv = saved.contains(b.mac) ? QStringLiteral(" [%1]").arg(kalm::trKey("status_in_list")) : QString{};
             out << "  • " << b.name << " — " << b.mac << " (" << tag << ", " << conn << ")" << sv << "\n";
@@ -711,14 +730,32 @@ int main(int argc, char** argv) {
                         .arg(positional[1])
                         .toStdString());
             }
+
+            // vivo GAIA and HUAWEI SPP use different preset ids for the same
+            // sound profile; translate the CLI slug for HUAWEI devices.
+            int targetCode = *eff;
+            const char* labelKey = nullptr;
+            if (isHuaweiCliTarget(reg, deviceQuery)) {
+                switch (*eff) {
+                    case 0: targetCode = 1; labelKey = "eq_standard"; break;
+                    case 1: targetCode = 9; labelKey = "eq_vocal"; break;
+                    case 2: targetCode = 2; labelKey = "eq_bass"; break;
+                    case 3: targetCode = 3; labelKey = "eq_treble"; break;
+                    default:
+                        throw std::runtime_error(
+                            "This sound preset is not available on HUAWEI earbuds.");
+                }
+            }
+
             const auto ipc = deviceQuery.isEmpty()
                                  ? kalm::ipcRequest(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_eq")},
-                                                                {QStringLiteral("effect"), *eff}})
+                                                                {QStringLiteral("effect"), targetCode}})
                                  : std::nullopt;
             if (!ipc || !ipc->value(QStringLiteral("ok")).toBool()) {
-                kalm::oneshotSetEq(reg, *eff, deviceQuery);
+                kalm::oneshotSetEq(reg, targetCode, deviceQuery);
             }
-            out << kalm::trKey("cli_sound") << " " << kalm::audioEffectLabel(*eff) << "\n";
+            out << kalm::trKey("cli_sound") << " "
+                << (labelKey ? kalm::trKey(labelKey) : kalm::audioEffectLabel(*eff)) << "\n";
             return 0;
         }
 

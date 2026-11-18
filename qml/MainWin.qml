@@ -124,6 +124,13 @@ ApplicationWindow {
                 model: backend.languageModel
                 textRole: "text"
                 valueRole: "value"
+                delegate: ItemDelegate {
+                    required property var modelData
+                    required property int index
+                    width: drawerLangCombo.width
+                    text: modelData.text
+                    highlighted: drawerLangCombo.highlightedIndex === index
+                }
                 currentIndex: backend.languageIndex
                 displayText: (backend.languageIndex >= 0 && backend.languageIndex < backend.languageModel.length)
                              ? backend.languageModel[backend.languageIndex].text : ""
@@ -495,9 +502,9 @@ ApplicationWindow {
                         }
                     }
 
-                    // ANC Level selector (visible when ANC active on Vivo)
+                    // ANC Level selector
                     ColumnLayout {
-                        visible: backend.vivoFeatures && backend.noiseModeIndex === 0
+                        visible: backend.supportsAncLevels && backend.noiseModeIndex === 0
                         Layout.fillWidth: true
                         spacing: 4
 
@@ -510,6 +517,13 @@ ApplicationWindow {
                             model: backend.ancLevelModel
                             textRole: "text"
                             valueRole: "value"
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                required property int index
+                                width: ancLevelCombo.width
+                                text: modelData.text
+                                highlighted: ancLevelCombo.highlightedIndex === index
+                            }
                             currentIndex: backend.ancLevelIndex
                             displayText: (backend.ancLevelIndex >= 0 && backend.ancLevelIndex < backend.ancLevelModel.length)
                                          ? backend.ancLevelModel[backend.ancLevelIndex].text : ""
@@ -524,9 +538,9 @@ ApplicationWindow {
                         Label { text: root.i18n.anc_level_desc; color: root.textSecondary; font.pixelSize: 12 }
                     }
 
-                    // Transparency Effect selector (visible when Transparency active on Vivo)
+                    // Transparency Effect selector
                     ColumnLayout {
-                        visible: backend.vivoFeatures && backend.noiseModeIndex === 2
+                        visible: backend.supportsTransEffects && backend.noiseModeIndex === 2
                         Layout.fillWidth: true
                         spacing: 4
 
@@ -539,6 +553,13 @@ ApplicationWindow {
                             model: backend.transEffectModel
                             textRole: "text"
                             valueRole: "value"
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                required property int index
+                                width: transEffectCombo.width
+                                text: modelData.text
+                                highlighted: transEffectCombo.highlightedIndex === index
+                            }
                             currentIndex: backend.transEffectIndex
                             displayText: (backend.transEffectIndex >= 0 && backend.transEffectIndex < backend.transEffectModel.length)
                                          ? backend.transEffectModel[backend.transEffectIndex].text : ""
@@ -555,9 +576,9 @@ ApplicationWindow {
                 }
             }
 
-            // ---- 4. Sound & Controls Section (Vivo GAIA) ----
+            // ---- 4. Sound & Controls Section ----
             Label {
-                visible: backend.connected && backend.vivoFeatures
+                visible: backend.connected && (backend.supportsEq || backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
                 text: root.i18n.section_sound
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -568,7 +589,7 @@ ApplicationWindow {
             }
 
             Rectangle {
-                visible: backend.connected && backend.vivoFeatures
+                visible: backend.connected && (backend.supportsEq || backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
                 Layout.fillWidth: true
                 implicitHeight: soundCol.implicitHeight + 28
                 radius: 12
@@ -584,51 +605,88 @@ ApplicationWindow {
                     anchors.margins: 14
                     spacing: 10
 
-                    Label { text: root.i18n.eq_title; color: root.textPrimary; font.weight: Font.Medium }
-                    ComboBox {
-                        id: eqCombo
+                    ColumnLayout {
+                        visible: backend.supportsEq
                         Layout.fillWidth: true
-                        model: backend.eqModel
-                        textRole: "text"
-                        valueRole: "value"
-                        currentIndex: backend.eqIndex
-                        displayText: (backend.eqIndex >= 0 && backend.eqIndex < backend.eqModel.length)
-                                     ? backend.eqModel[backend.eqIndex].text : ""
-                        onModelChanged: Qt.callLater(function() { eqCombo.currentIndex = backend.eqIndex })
-                        onActivated: function(index) { backend.setEqByIndex(index) }
-                        Connections {
-                            target: backend
-                            function onStateChanged() { eqCombo.currentIndex = backend.eqIndex }
-                            function onLanguageChanged() { Qt.callLater(function() { eqCombo.currentIndex = backend.eqIndex }) }
+                        spacing: 6
+
+                        Label { text: root.i18n.eq_title; color: root.textPrimary; font.weight: Font.Medium }
+                        ComboBox {
+                            id: eqCombo
+                            Layout.fillWidth: true
+                            model: backend.eqModel
+                            textRole: "text"
+                            valueRole: "value"
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                required property int index
+                                width: eqCombo.width
+                                text: modelData.text
+                                highlighted: eqCombo.highlightedIndex === index
+                            }
+                            currentIndex: backend.eqIndex
+                            displayText: (backend.eqIndex >= 0 && backend.eqIndex < backend.eqModel.length)
+                                         ? backend.eqModel[backend.eqIndex].text : ""
+                            onModelChanged: Qt.callLater(function() { eqCombo.currentIndex = backend.eqIndex })
+                            onActivated: function(index) { backend.setEqByIndex(index) }
+                            Connections {
+                                target: backend
+                                function onStateChanged() { eqCombo.currentIndex = backend.eqIndex }
+                                function onLanguageChanged() { Qt.callLater(function() { eqCombo.currentIndex = backend.eqIndex }) }
+                            }
                         }
+                        Label { text: root.i18n.eq_desc; color: root.textSecondary; font.pixelSize: 12 }
                     }
-                    Label { text: root.i18n.eq_desc; color: root.textSecondary; font.pixelSize: 12 }
 
-                    Rectangle { height: 1; Layout.fillWidth: true; color: root.cardBorder }
-
-                    Label { text: root.i18n.cycle_title; color: root.textPrimary; font.weight: Font.Medium }
-                    ComboBox {
-                        id: cycleCombo
+                    Rectangle {
+                        visible: backend.supportsEq && (backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
+                        height: 1
                         Layout.fillWidth: true
-                        model: backend.cycleModel
-                        textRole: "text"
-                        valueRole: "value"
-                        currentIndex: backend.cycleIndex
-                        displayText: (backend.cycleIndex >= 0 && backend.cycleIndex < backend.cycleModel.length)
-                                     ? backend.cycleModel[backend.cycleIndex].text : ""
-                        onModelChanged: Qt.callLater(function() { cycleCombo.currentIndex = backend.cycleIndex })
-                        onActivated: function(index) { backend.setCycleByIndex(index) }
-                        Connections {
-                            target: backend
-                            function onStateChanged() { cycleCombo.currentIndex = backend.cycleIndex }
-                            function onLanguageChanged() { Qt.callLater(function() { cycleCombo.currentIndex = backend.cycleIndex }) }
-                        }
+                        color: root.cardBorder
                     }
-                    Label { text: root.i18n.cycle_desc; color: root.textSecondary; font.pixelSize: 12 }
 
-                    Rectangle { height: 1; Layout.fillWidth: true; color: root.cardBorder }
+                    ColumnLayout {
+                        visible: backend.supportsNoiseCycle
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Label { text: root.i18n.cycle_title; color: root.textPrimary; font.weight: Font.Medium }
+                        ComboBox {
+                            id: cycleCombo
+                            Layout.fillWidth: true
+                            model: backend.cycleModel
+                            textRole: "text"
+                            valueRole: "value"
+                            delegate: ItemDelegate {
+                                required property var modelData
+                                required property int index
+                                width: cycleCombo.width
+                                text: modelData.text
+                                highlighted: cycleCombo.highlightedIndex === index
+                            }
+                            currentIndex: backend.cycleIndex
+                            displayText: (backend.cycleIndex >= 0 && backend.cycleIndex < backend.cycleModel.length)
+                                         ? backend.cycleModel[backend.cycleIndex].text : ""
+                            onModelChanged: Qt.callLater(function() { cycleCombo.currentIndex = backend.cycleIndex })
+                            onActivated: function(index) { backend.setCycleByIndex(index) }
+                            Connections {
+                                target: backend
+                                function onStateChanged() { cycleCombo.currentIndex = backend.cycleIndex }
+                                function onLanguageChanged() { Qt.callLater(function() { cycleCombo.currentIndex = backend.cycleIndex }) }
+                            }
+                        }
+                        Label { text: root.i18n.cycle_desc; color: root.textSecondary; font.pixelSize: 12 }
+                    }
+
+                    Rectangle {
+                        visible: backend.supportsNoiseCycle && (backend.supportsGameMode || backend.supportsWearDetection)
+                        height: 1
+                        Layout.fillWidth: true
+                        color: root.cardBorder
+                    }
 
                     RowLayout {
+                        visible: backend.supportsGameMode
                         Layout.fillWidth: true
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -642,9 +700,15 @@ ApplicationWindow {
                         }
                     }
 
-                    Rectangle { height: 1; Layout.fillWidth: true; color: root.cardBorder }
+                    Rectangle {
+                        visible: backend.supportsGameMode && backend.supportsWearDetection
+                        height: 1
+                        Layout.fillWidth: true
+                        color: root.cardBorder
+                    }
 
                     RowLayout {
+                        visible: backend.supportsWearDetection
                         Layout.fillWidth: true
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -775,7 +839,7 @@ ApplicationWindow {
 
             // ---- 6. Multipoint Section ----
             Label {
-                visible: backend.connected && backend.multipointDevices.length > 0
+                visible: backend.connected && backend.supportsMultipoint && backend.multipointDevices.length > 0
                 text: root.i18n.section_multipoint
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -786,7 +850,7 @@ ApplicationWindow {
             }
 
             Rectangle {
-                visible: backend.connected && backend.multipointDevices.length > 0
+                visible: backend.connected && backend.supportsMultipoint && backend.multipointDevices.length > 0
                 Layout.fillWidth: true
                 implicitHeight: mpCol.implicitHeight + 28
                 radius: 12
@@ -839,9 +903,9 @@ ApplicationWindow {
                 }
             }
 
-            // ---- 7. Find Device Section (Vivo GAIA) ----
+            // ---- 7. Find Device Section ----
             Label {
-                visible: backend.connected && backend.vivoFeatures
+                visible: backend.connected && backend.supportsFindDevice
                 text: root.i18n.section_find
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
@@ -852,7 +916,7 @@ ApplicationWindow {
             }
 
             Rectangle {
-                visible: backend.connected && backend.vivoFeatures
+                visible: backend.connected && backend.supportsFindDevice
                 Layout.fillWidth: true
                 implicitHeight: findRow.implicitHeight + 24
                 radius: 12

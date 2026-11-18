@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "probe.hpp"
 
+#include "huawei.hpp"
 #include "protocol.hpp"
 #include "transport.hpp"
 
@@ -138,7 +139,7 @@ std::optional<BluezDevice> pickProbeDevice(DeviceRegistry& reg, const QString& q
         }
     }
     for (const auto& b : all) {
-        if (b.connected && b.isVivoTws()) return b;
+        if (b.connected && b.isSupportedTws()) return b;
     }
     for (const auto& b : all) {
         if (b.connected && b.isAudioDevice()) return b;
@@ -309,6 +310,62 @@ bool runVivoGaiaProbe(SocketHandle fd, QTextStream& out) {
     return true;
 }
 
+bool runHuaweiSppProbe(SocketHandle fd, QTextStream& out) {
+    auto formatHw = [](const huawei::Packet& p) -> QString {
+        const QString cmdHex = QString::fromLatin1(p.command.toHex());
+        if (cmdHex == u"0107") {
+            EarbudState tmp;
+            huawei::applyPacket(p, tmp, huawei::profileFor({}));
+            return QStringLiteral("cmd=0x0107 fw=%1 (serial/SN redacted)")
+                .arg(tmp.firmware.isEmpty() ? QStringLiteral("n/a") : tmp.firmware);
+        }
+        if (cmdHex == u"2b31") {
+            return QStringLiteral("cmd=0x2b31 (dual-connect host redacted)");
+        }
+        QStringList tlvs;
+        for (auto it = p.params.cbegin(); it != p.params.cend(); ++it) {
+            tlvs.append(QStringLiteral("%1:[%2]").arg(it.key()).arg(hexSpaced(it.value())));
+        }
+        return QStringLiteral("cmd=0x%1 {%2}").arg(cmdHex, tlvs.join(QStringLiteral(", ")));
+    };
+
+    if (!sendAll(fd, huawei::buildQueryBattery())) return false;
+    huawei::Decoder dec;
+    const QByteArray firstRx = drainRawBytes(fd, 450);
+    const auto firstPkts = dec.feed(firstRx);
+    if (firstPkts.isEmpty()) return false;
+
+    out << "\n### HUAWEI SPP (`0x5A` Protocol) Probe\n";
+    for (const auto& p : firstPkts) {
+        out << "- `0x0108` Battery: `" << formatHw(p) << "`\n";
+    }
+
+    struct HwSpec {
+        const char* label;
+        QByteArray pkt;
+    };
+    const std::vector<HwSpec> specs = {
+        {"Device Info (`0x0107`)", huawei::buildQueryInfo()},
+        {"Noise Control (`0x2b2a`)", huawei::buildQueryAnc()},
+        {"Equalizer (`0x2b4a`)", huawei::buildQueryEqualizer()},
+        {"Low Latency (`0x2b6c`)", huawei::buildQueryLowLatency()},
+        {"Auto-Pause (`0x2b11`)", huawei::buildQueryAutoPause()},
+        {"Dual-Connect Switch (`0x2b2f`)", huawei::buildQueryDualConnectEnabled()},
+    };
+    for (const auto& sp : specs) {
+        sendAll(fd, sp.pkt);
+        const auto pkts = dec.feed(drainRawBytes(fd, 260));
+        if (pkts.isEmpty()) {
+            out << "  - " << sp.label << ": *(no reply)*\n";
+        } else {
+            QStringList items;
+            for (const auto& p : pkts) items.append(formatHw(p));
+            out << "  - " << sp.label << ": `" << items.join(QStringLiteral(" | ")) << "`\n";
+        }
+    }
+    return true;
+}
+
 bool runAirohaRaceProbe(SocketHandle fd, QTextStream& out) {
     // Airoha RACE read-only battery query: 05 5A 03 00 D6 0C 00
     const QByteArray raceBatt = QByteArray::fromHex("055a0300d60c00");
@@ -369,17 +426,29 @@ QString generateDiagnosticReport(DeviceRegistry& registry,
 
     UniqueSocket sock;
     QString connectedVia;
+    if (dev.isHuaweiTws()) {
+        for (int ch : {1, 16}) {
+            sock = openRfcommByChannel(dev.mac, ch, 1500);
+            if (sock) {
+                connectedVia = QStringLiteral("RFCOMM channel `%1` (HUAWEI SPP)").arg(ch);
+                break;
+            }
+        }
+    }
+
     const QStringList candUuids = buildCandidateControlUuids(dev.uuids);
-    for (const QString& u : candUuids) {
-        sock = openRfcommByUuid(dev.mac, dev.path, u, 2500);
-        if (sock) {
-            const int ch = getRfcommPeerChannel(sock.get());
-            connectedVia = (ch > 0)
-                               ? QStringLiteral("UUID `%1` (channel %2)").arg(u).arg(ch)
-                               : QStringLiteral("UUID `%1` (SDP auto)").arg(u);
-            break;
-        } else {
-            out << "- UUID `" << u << "`: *(connection refused / not open)*\n";
+    if (!sock) {
+        for (const QString& u : candUuids) {
+            sock = openRfcommByUuid(dev.mac, dev.path, u, 2500);
+            if (sock) {
+                const int ch = getRfcommPeerChannel(sock.get());
+                connectedVia = (ch > 0)
+                                   ? QStringLiteral("UUID `%1` (channel %2)").arg(u).arg(ch)
+                                   : QStringLiteral("UUID `%1` (SDP auto)").arg(u);
+                break;
+            } else {
+                out << "- UUID `" << u << "`: *(connection refused / not open)*\n";
+            }
         }
     }
 
@@ -423,30 +492,39 @@ QString generateDiagnosticReport(DeviceRegistry& registry,
 
     // 2. Choose probe order based on advertised UUIDs / brand name
     const QString lowName = dev.name.toLower();
+    const bool looksLikeHuawei = dev.isHuaweiTws();
     const bool looksLikeOppoRealme =
         candUuids.contains(QLatin1String(kRealmeOppoTlUuid)) ||
         candUuids.contains(QLatin1String(kOppoHeyMelodyUuid)) ||
         lowName.contains(u"realme") || lowName.contains(u"oppo") || lowName.contains(u"oneplus");
 
     bool matchedAny = false;
-    if (looksLikeOppoRealme) {
+    if (looksLikeHuawei) {
+        matchedAny = runHuaweiSppProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runVivoGaiaProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runRealmeOppoProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runAirohaRaceProbe(sock.get(), out);
+    } else if (looksLikeOppoRealme) {
         matchedAny = runRealmeOppoProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runVivoGaiaProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runHuaweiSppProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runAirohaRaceProbe(sock.get(), out);
     } else {
         matchedAny = runVivoGaiaProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runRealmeOppoProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runHuaweiSppProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runAirohaRaceProbe(sock.get(), out);
     }
 
     if (!matchedAny) {
-        out << "- **Auto-Probe:** Channel is open, but did not respond to Vivo GAIA (`0xFF`), OPPO/realme (`0xAA`), or Airoha RACE (`0x05 0x5A`). Run `kalm probe --listen 15` while toggling ANC on the earbuds to capture raw frames!\n";
+        out << "- **Auto-Probe:** Channel is open, but did not respond to Vivo GAIA (`0xFF`), OPPO/realme (`0xAA`), HUAWEI SPP (`0x5A`), or Airoha RACE (`0x05 0x5A`). Run `kalm probe --listen 15` while toggling ANC on the earbuds to capture raw frames!\n";
     }
 
     // 3. Universal Live Event Listener (--listen <sec>)
     if (listenSeconds > 0) {
         out << "\n### Live Event Capture (" << listenSeconds << "s)\n";
         FrameDecoder vivoDec;
+        huawei::Decoder hwDec;
         QElapsedTimer listenTimer;
         listenTimer.start();
         const qint64 totalMs = static_cast<qint64>(listenSeconds) * 1000;
@@ -457,6 +535,22 @@ QString generateDiagnosticReport(DeviceRegistry& registry,
             if (chunk.isEmpty()) continue;
 
             const double sec = static_cast<double>(listenTimer.elapsed()) / 1000.0;
+            const auto hwPackets = hwDec.feed(chunk);
+            if (!hwPackets.isEmpty()) {
+                for (const auto& p : hwPackets) {
+                    ++capturedCount;
+                    const QString cmdHex = QString::fromLatin1(p.command.toHex());
+                    if (cmdHex == u"2b31" || cmdHex == u"0107") {
+                        out << "- `[+" << QString::number(sec, 'f', 1) << "s]` HUAWEI SPP: `cmd=0x"
+                            << cmdHex << " (redacted)`\n";
+                    } else {
+                        out << "- `[+" << QString::number(sec, 'f', 1) << "s]` HUAWEI SPP: `cmd=0x"
+                            << cmdHex << " raw=[" << hexSpaced(p.raw) << "]`\n";
+                    }
+                }
+                continue;
+            }
+
             const auto tlFrames = parseRealmeOppoFrames(chunk);
             if (!tlFrames.isEmpty()) {
                 for (const auto& f : tlFrames) {

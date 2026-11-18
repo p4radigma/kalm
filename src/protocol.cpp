@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "protocol.hpp"
 
+#include "huawei.hpp"
 #include "i18n.hpp"
 
 #include <QDir>
@@ -351,7 +352,7 @@ QJsonObject EarbudState::toJson() const {
     QString fullModeLabel;
     if (noiseMode) {
         fullModeLabel = noiseModeLabel(*noiseMode);
-        if (protocol == DeviceProtocol::VivoGaia) {
+        if (protocol == DeviceProtocol::VivoGaia || protocol == DeviceProtocol::HuaweiSpp) {
             if (*noiseMode == NoiseMode::Anc && noiseEffect) {
                 const QString sub = ancLevelLabel(*noiseEffect);
                 if (!sub.isEmpty()) fullModeLabel += QStringLiteral(" (%1)").arg(sub);
@@ -362,9 +363,13 @@ QJsonObject EarbudState::toJson() const {
         }
     }
 
+    QString protoStr = QStringLiteral("vivo_gaia");
+    if (protocol == DeviceProtocol::RealmeOppoTl) protoStr = QStringLiteral("realme_tl");
+    else if (protocol == DeviceProtocol::HuaweiSpp) protoStr = QStringLiteral("huawei_spp");
+
     return QJsonObject{
         {QStringLiteral("connected"), connected},
-        {QStringLiteral("protocol"), protocol == DeviceProtocol::RealmeOppoTl ? QStringLiteral("realme_tl") : QStringLiteral("vivo_gaia")},
+        {QStringLiteral("protocol"), protoStr},
         {QStringLiteral("device_name"), deviceName},
         {QStringLiteral("device_mac"), deviceMac},
         {QStringLiteral("firmware"), firmware.isEmpty() ? QJsonValue() : QJsonValue(firmware)},
@@ -379,7 +384,11 @@ QJsonObject EarbudState::toJson() const {
         {QStringLiteral("battery"), batt},
         {QStringLiteral("wear"), wear},
         {QStringLiteral("audio_effect"), optInt(audioEffect)},
-        {QStringLiteral("audio_effect_label"), audioEffect ? QJsonValue(audioEffectLabel(*audioEffect)) : QJsonValue()},
+        {QStringLiteral("audio_effect_label"),
+         audioEffect ? QJsonValue(protocol == DeviceProtocol::HuaweiSpp
+                                      ? huawei::eqPresetLabel(*audioEffect)
+                                      : audioEffectLabel(*audioEffect))
+                     : QJsonValue()},
         {QStringLiteral("low_latency"), optBool(lowLatency)},
         {QStringLiteral("noise_cycle"), nc},
         {QStringLiteral("paired_devices"), devs},

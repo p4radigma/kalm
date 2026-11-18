@@ -4,6 +4,7 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import org.kde.kirigamiaddons.formcard as FormCard
+import org.kde.kirigamiaddons.delegates as Delegates
 
 Kirigami.ApplicationWindow {
     id: root
@@ -106,6 +107,7 @@ Kirigami.ApplicationWindow {
             Kirigami.Action {
                 text: root.i18n.action_probe
                 icon.name: "tools-report-bug"
+                visible: backend.supportsProbe
                 onTriggered: {
                     backend.runDiagnosticProbe()
                     probeDialog.open()
@@ -415,12 +417,17 @@ Kirigami.ApplicationWindow {
             }
 
             FormCard.FormDelegateSeparator {
-                visible: backend.vivoFeatures && backend.noiseModeIndex === 0
+                visible: backend.supportsAncLevels && backend.noiseModeIndex === 0
             }
 
             FormCard.FormComboBoxDelegate {
                 id: ancLevelCombo
-                visible: backend.vivoFeatures && backend.noiseModeIndex === 0
+                comboBoxDelegate: Delegates.RoundedItemDelegate {
+                    implicitWidth: ListView.view ? ListView.view.width : Kirigami.Units.gridUnit * 16
+                    text: backend.ancLevelModel[index] ? backend.ancLevelModel[index].text : ""
+                    highlighted: backend.ancLevelIndex === index
+                }
+                visible: backend.supportsAncLevels && backend.noiseModeIndex === 0
                 text: root.i18n.anc_level_title
                 description: root.i18n.anc_level_desc
                 model: backend.ancLevelModel
@@ -441,12 +448,17 @@ Kirigami.ApplicationWindow {
             }
 
             FormCard.FormDelegateSeparator {
-                visible: backend.vivoFeatures && backend.noiseModeIndex === 2
+                visible: backend.supportsTransEffects && backend.noiseModeIndex === 2
             }
 
             FormCard.FormComboBoxDelegate {
                 id: transEffectCombo
-                visible: backend.vivoFeatures && backend.noiseModeIndex === 2
+                comboBoxDelegate: Delegates.RoundedItemDelegate {
+                    implicitWidth: ListView.view ? ListView.view.width : Kirigami.Units.gridUnit * 16
+                    text: backend.transEffectModel[index] ? backend.transEffectModel[index].text : ""
+                    highlighted: backend.transEffectIndex === index
+                }
+                visible: backend.supportsTransEffects && backend.noiseModeIndex === 2
                 text: root.i18n.trans_effect_title
                 description: root.i18n.trans_effect_desc
                 model: backend.transEffectModel
@@ -467,10 +479,10 @@ Kirigami.ApplicationWindow {
             }
         }
 
-        // ---- Sound & Controls Section (Vivo GAIA) ----
+        // ---- Sound & Controls Section ----
         FormCard.FormHeader {
             maximumWidth: root.cardMaxW
-            visible: backend.connected && backend.vivoFeatures
+            visible: backend.connected && (backend.supportsEq || backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
             title: root.i18n.section_sound
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing + 2
@@ -478,11 +490,17 @@ Kirigami.ApplicationWindow {
 
         FormCard.FormCard {
             maximumWidth: root.cardMaxW
-            visible: backend.connected && backend.vivoFeatures
+            visible: backend.connected && (backend.supportsEq || backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
             enabled: backend.connected
 
             FormCard.FormComboBoxDelegate {
                 id: eqCombo
+                comboBoxDelegate: Delegates.RoundedItemDelegate {
+                    implicitWidth: ListView.view ? ListView.view.width : Kirigami.Units.gridUnit * 16
+                    text: backend.eqModel[index] ? backend.eqModel[index].text : ""
+                    highlighted: backend.eqIndex === index
+                }
+                visible: backend.supportsEq
                 text: root.i18n.eq_title
                 description: root.i18n.eq_desc
                 model: backend.eqModel
@@ -502,10 +520,20 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-            FormCard.FormDelegateSeparator { above: eqCombo; below: cycleCombo }
+            FormCard.FormDelegateSeparator {
+                visible: backend.supportsEq && (backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
+                above: eqCombo
+                below: backend.supportsNoiseCycle ? cycleCombo : (backend.supportsGameMode ? gameSwitch : wearSwitch)
+            }
 
             FormCard.FormComboBoxDelegate {
                 id: cycleCombo
+                comboBoxDelegate: Delegates.RoundedItemDelegate {
+                    implicitWidth: ListView.view ? ListView.view.width : Kirigami.Units.gridUnit * 16
+                    text: backend.cycleModel[index] ? backend.cycleModel[index].text : ""
+                    highlighted: backend.cycleIndex === index
+                }
+                visible: backend.supportsNoiseCycle
                 text: root.i18n.cycle_title
                 description: root.i18n.cycle_desc
                 model: backend.cycleModel
@@ -525,20 +553,30 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-            FormCard.FormDelegateSeparator { above: cycleCombo; below: gameSwitch }
+            FormCard.FormDelegateSeparator {
+                visible: backend.supportsNoiseCycle && (backend.supportsGameMode || backend.supportsWearDetection)
+                above: cycleCombo
+                below: backend.supportsGameMode ? gameSwitch : wearSwitch
+            }
 
             FormCard.FormSwitchDelegate {
                 id: gameSwitch
+                visible: backend.supportsGameMode
                 text: root.i18n.game_title
                 description: root.i18n.game_desc
                 checked: backend.gameMode
                 onToggled: backend.setGameMode(checked)
             }
 
-            FormCard.FormDelegateSeparator { above: gameSwitch; below: wearSwitch }
+            FormCard.FormDelegateSeparator {
+                visible: backend.supportsGameMode && backend.supportsWearDetection
+                above: gameSwitch
+                below: wearSwitch
+            }
 
             FormCard.FormSwitchDelegate {
                 id: wearSwitch
+                visible: backend.supportsWearDetection
                 text: root.i18n.wear_detect_title
                 description: root.i18n.wear_detect_desc
                 checked: backend.wearDetection
@@ -644,12 +682,12 @@ Kirigami.ApplicationWindow {
             title: root.i18n.section_multipoint
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing + 2
-            visible: backend.connected && backend.multipointDevices.length > 0
+            visible: backend.supportsMultipoint && backend.connected && backend.multipointDevices.length > 0
         }
 
         FormCard.FormCard {
             maximumWidth: root.cardMaxW
-            visible: backend.connected && backend.multipointDevices.length > 0
+            visible: backend.supportsMultipoint && backend.connected && backend.multipointDevices.length > 0
 
             Repeater {
                 model: backend.multipointDevices
@@ -685,10 +723,10 @@ Kirigami.ApplicationWindow {
             }
         }
 
-        // ---- Find My Earbuds Section (Vivo GAIA) ----
+        // ---- Find My Earbuds Section ----
         FormCard.FormHeader {
             maximumWidth: root.cardMaxW
-            visible: backend.connected && backend.vivoFeatures
+            visible: backend.connected && backend.supportsFindDevice
             title: root.i18n.section_find
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing + 2
@@ -696,7 +734,7 @@ Kirigami.ApplicationWindow {
 
         FormCard.FormCard {
             maximumWidth: root.cardMaxW
-            visible: backend.connected && backend.vivoFeatures
+            visible: backend.connected && backend.supportsFindDevice
             enabled: backend.connected
 
             FormCard.FormButtonDelegate {

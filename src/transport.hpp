@@ -83,7 +83,8 @@ struct BluezDevice {
 
     bool isVivoTws() const;
     bool isRealmeOppoTws() const;
-    bool isSupportedTws() const { return isVivoTws() || isRealmeOppoTws(); }
+    bool isHuaweiTws() const;
+    bool isSupportedTws() const { return isVivoTws() || isRealmeOppoTws() || isHuaweiTws(); }
     bool isAudioDevice() const;
 };
 
@@ -119,7 +120,15 @@ std::optional<RfcommConnection> tryOpenRealmeOppoRfcomm(const QString& mac,
                                                         const QStringList& uuids = {},
                                                         int timeoutMs = 2500);
 
-// Auto-negotiates either Vivo GAIA or realme/OPPO/OnePlus TL protocol for the target earbuds.
+// Opens an RFCOMM socket to a HUAWEI device (SPP channel 1 on modern models)
+// and verifies it by sending a battery query (0x0108).
+RfcommConnection openHuaweiRfcomm(const QString& mac,
+                                  const QString& devPath = {},
+                                  const QString& name = {},
+                                  const QStringList& uuids = {},
+                                  int timeoutMs = 2500);
+
+// Auto-negotiates Vivo GAIA, realme/OPPO/OnePlus TL, or HUAWEI SPP protocol for the target earbuds.
 RfcommConnection openEarbudRfcomm(const QString& mac,
                                   const QString& devPath = {},
                                   const QString& name = {},

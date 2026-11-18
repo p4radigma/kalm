@@ -61,6 +61,8 @@ else()
 endif()
 
 add_library(kalm_core STATIC
+    src/huawei.cpp
+    src/huawei.hpp
     src/i18n.cpp
     src/i18n.hpp
     src/probe.cpp

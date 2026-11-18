@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "huawei.hpp"
 #include "protocol.hpp"
 #include "registry.hpp"
+#include "transport.hpp"
 
 #include <QJsonObject>
 #include <QList>
+#include <QMap>
 #include <QMutex>
 #include <QString>
 #include <QWaitCondition>
@@ -19,6 +22,33 @@ namespace kalm {
 
 QString ipcSocketPath();
 std::optional<QJsonObject> ipcRequest(const QJsonObject& payload, int timeoutMs = 2500);
+
+// Protocol-dependent capabilities and preset lists. The GUI and system tray
+// rebuild their selectors and section visibility from here so each brand only
+// exposes controls the connected earbuds actually support.
+struct SessionCapabilities {
+    DeviceProtocol protocol = DeviceProtocol::VivoGaia;
+    QString profileLabel;
+
+    bool ancLevels = true;
+    bool transparency = true;
+    bool equalizer = true;
+    bool gameMode = true;
+    bool wearDetection = true;
+    bool noiseCycle = true;
+    bool multipoint = true;
+    bool findDevice = true;
+    bool probe = true;
+
+    QList<PresetEntry> ancLevelList;
+    QList<PresetEntry> transparencyList;
+    QList<PresetEntry> eqList;
+    QList<PresetEntry> cycleList;
+
+    QString signature() const {
+        return QStringLiteral("%1:%2").arg(static_cast<int>(protocol)).arg(profileLabel);
+    }
+};
 
 class KalmSession {
 public:
@@ -35,6 +65,7 @@ public:
 
     DeviceRegistry& registry() { return m_registry; }
     EarbudState snapshot() const;
+    SessionCapabilities capabilities() const;
 
     void start();
     void stop();
@@ -66,13 +97,43 @@ private:
         Frame result;
     };
 
+    struct RealmeWaiter {
+        std::function<bool(const RealmeOppoFrame&)> pred;
+        QMutex mtx;
+        QWaitCondition cv;
+        bool done = false;
+        RealmeOppoFrame result;
+    };
+
+    struct HuaweiWaiter {
+        std::function<bool(const huawei::Packet&)> pred;
+        QMutex mtx;
+        QWaitCondition cv;
+        bool done = false;
+        huawei::Packet result;
+    };
+
     void runLoop();
     void handleFrames(const QList<Frame>& frames);
+    bool handleRealmeFrames(const QList<RealmeOppoFrame>& frames);
+    void handleHuaweiPackets(const QList<huawei::Packet>& packets);
+    void updateProtocolHint(const QString& rawName, const QStringList& uuids = {});
     void closeSocket(bool resetIdentity = false);
     bool sendRaw(const QByteArray& data);
     std::optional<Frame> sendAndWait(const QByteArray& packet,
                                      std::function<bool(const Frame&)> pred,
                                      int timeoutMs = 1800);
+    std::optional<RealmeOppoFrame> sendAndWaitRealme(const QByteArray& packet,
+                                                     std::function<bool(const RealmeOppoFrame&)> pred,
+                                                     int timeoutMs = 2000);
+    std::optional<huawei::Packet> sendAndWaitHuawei(const QList<QByteArray>& packets,
+                                                    std::function<bool(const huawei::Packet&)> pred,
+                                                    int timeoutMs = 1800);
+    bool huaweiApply(const QByteArray& setPacket,
+                     const QByteArray& ackCommand,
+                     std::function<bool(const huawei::Packet&)> isTarget,
+                     const QByteArray& queryPacket,
+                     int timeoutMs = 1600);
     void wakeWorker();
 
     void emitState();
@@ -86,8 +147,15 @@ private:
     ErrorCallback m_onError;
 
     mutable QRecursiveMutex m_lock;
-    int m_sockFd = -1;
+    SocketHandle m_sockFd = kInvalidSocket;
+    DeviceProtocol m_protocol = DeviceProtocol::VivoGaia;
+    QString m_modelName;
     WireProfile m_profile;
+    huawei::ModelProfile m_hwProfile;
+    QMap<int, MultiConnectDevice> m_hwDcRows;
+    int m_hwDcCount = 0;
+    bool m_mprisPausedByWear = false;
+    QString m_mprisService;
     EarbudState m_state;
 
     std::atomic<bool> m_stop{false};
@@ -99,11 +167,16 @@ private:
 
     QMutex m_waitersMtx;
     QList<std::shared_ptr<Waiter>> m_waiters;
+    QList<std::shared_ptr<RealmeWaiter>> m_realmeWaiters;
+    QList<std::shared_ptr<HuaweiWaiter>> m_hwWaiters;
 };
 
 class IpcServer {
 public:
-    IpcServer(KalmSession& session, std::function<void(const QString&)> onShowWindow = {});
+    using ShowCallback = std::function<void(const QString&)>;
+    using NotifyCallback = std::function<void(const QString&, const QString&)>;
+
+    IpcServer(KalmSession& session, ShowCallback onShowWindow = {}, NotifyCallback onNotify = {});
     ~IpcServer();
 
     bool start();
@@ -111,13 +184,14 @@ public:
 
 private:
     void acceptLoop();
-    void handleClient(int clientFd);
+    void handleClient(SocketHandle clientFd);
     QJsonObject dispatch(const QJsonObject& req);
 
     KalmSession& m_session;
-    std::function<void(const QString&)> m_onShowWindow;
+    ShowCallback m_onShowWindow;
+    NotifyCallback m_onNotify;
     QString m_path;
-    int m_serverFd = -1;
+    SocketHandle m_serverFd = kInvalidSocket;
     std::atomic<bool> m_stop{false};
     std::thread m_thread;
 };

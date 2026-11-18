@@ -1,10 +1,11 @@
-name: Build & Release
+name: Build & Release (Linux & Windows)
 
 on:
   push:
-    branches: [main]
+    branches: [main, universal]
     tags: ["v*"]
   pull_request:
+    branches: [main, universal]
   workflow_dispatch:
 
 permissions:
@@ -12,7 +13,7 @@ permissions:
 
 jobs:
   build-linux-x86_64:
-    name: Build Binary & AppImage (x86_64)
+    name: Build Linux Binary & AppImage (x86_64)
     runs-on: ubuntu-latest
     container:
       image: debian:trixie
@@ -72,9 +73,12 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build Kalm (Release)
         run: |
+          git config --global --add safe.directory '*'
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j$(nproc)
 
@@ -89,24 +93,101 @@ jobs:
           chmod +x dist/kalm-linux-x86_64 ./scripts/build-appimage.sh
           ./scripts/build-appimage.sh build dist/Kalm-x86_64.AppImage
           APPIMAGE_EXTRACT_AND_RUN=1 ./dist/Kalm-x86_64.AppImage --version
-          (cd dist && sha256sum Kalm-x86_64.AppImage kalm-linux-x86_64 > SHA256SUMS)
-          ls -lh dist/
+          (cd dist && sha256sum Kalm-x86_64.AppImage kalm-linux-x86_64 > SHA256SUMS-linux.txt)
 
-      - name: Upload CI artifacts
+      - name: Upload Linux CI artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kalm-linux-x86_64-artifacts
+          name: kalm-universal-linux-x86_64
           path: |
             dist/Kalm-x86_64.AppImage
             dist/kalm-linux-x86_64
-            dist/SHA256SUMS
+            dist/SHA256SUMS-linux.txt
 
-      - name: Publish GitHub Release on tag
-        if: startsWith(github.ref, 'refs/tags/v')
+  build-windows-x64:
+    name: Build Windows Installer & Portable ZIP (x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure MSVC x64 developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Qt 6.8 (MSVC 2022 x64)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: "windows"
+          target: "desktop"
+          arch: "win64_msvc2022_64"
+          cache: true
+
+      - name: Build Kalm with CMake & Ninja
+        shell: pwsh
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Run unit & handle leak tests
+        shell: pwsh
+        run: ctest --test-dir build --output-on-failure -V
+
+      - name: Package Portable ZIP & Inno Setup Installer (.exe)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/Kalm-win64 | Out-Null
+          Copy-Item build/kalm.exe dist/Kalm-win64/kalm.exe
+          Copy-Item models.json dist/Kalm-win64/models.json
+          Copy-Item README.md dist/Kalm-win64/README.md
+          Copy-Item -Recurse translations dist/Kalm-win64/translations
+
+          windeployqt --release --qmldir qml --no-translations --no-opengl-sw --compiler-runtime dist/Kalm-win64/kalm.exe
+          $ver = & ./dist/Kalm-win64/kalm.exe --version
+          Write-Host "Verified binary version: $ver"
+
+          Compress-Archive -Path "dist/Kalm-win64/*" -DestinationPath "dist/Kalm-win64-portable.zip" -Force
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "packaging\windows\kalm.iss"
+
+          Push-Location dist
+          $hashes = Get-FileHash -Algorithm SHA256 Kalm-win64-setup.exe, Kalm-win64-portable.zip |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }
+          $hashes | Set-Content -Encoding ascii SHA256SUMS-windows.txt
+          Pop-Location
+
+      - name: Upload Windows CI artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: kalm-universal-windows-x64
+          path: |
+            dist/Kalm-win64-setup.exe
+            dist/Kalm-win64-portable.zip
+            dist/SHA256SUMS-windows.txt
+
+  release:
+    name: Publish GitHub Release on Tag
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux-x86_64, build-windows-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download CI artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            dist/Kalm-x86_64.AppImage
-            dist/kalm-linux-x86_64
-            dist/SHA256SUMS
+            artifacts/kalm-universal-linux-x86_64/Kalm-x86_64.AppImage
+            artifacts/kalm-universal-linux-x86_64/kalm-linux-x86_64
+            artifacts/kalm-universal-linux-x86_64/SHA256SUMS-linux.txt
+            artifacts/kalm-universal-windows-x64/Kalm-win64-setup.exe
+            artifacts/kalm-universal-windows-x64/Kalm-win64-portable.zip
+            artifacts/kalm-universal-windows-x64/SHA256SUMS-windows.txt

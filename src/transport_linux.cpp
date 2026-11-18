@@ -14,6 +14,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
@@ -26,6 +27,8 @@
 #include <poll.h>
 #include <stdexcept>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace kalm {
@@ -61,7 +64,6 @@ bool parseMacToBdaddr(const QString& mac, bdaddr_k& out) {
         if (!ok || v < 0 || v > 255) return false;
         be[i] = static_cast<uint8_t>(v);
     }
-    // Linux bdaddr_t is little-endian (reversed byte order)
     for (int i = 0; i < 6; ++i) {
         out.b[i] = be[5 - i];
     }
@@ -103,37 +105,8 @@ void saveCachedChannel(const QString& mac, int channel) {
 }
 
 std::optional<RfcommConnection> tryConnectAndHandshake(const QString& mac, int channel, int timeoutMs) {
-    bdaddr_k bd{};
-    if (!parseMacToBdaddr(mac, bd)) return std::nullopt;
-
-    UniqueFd fd(::socket(AF_BLUETOOTH, SOCK_STREAM | SOCK_CLOEXEC, BTPROTO_RFCOMM));
+    UniqueSocket fd = openRfcommByChannel(mac, channel, timeoutMs);
     if (!fd) return std::nullopt;
-
-    const int origFlags = ::fcntl(fd.get(), F_GETFL, 0);
-    ::fcntl(fd.get(), F_SETFL, origFlags | O_NONBLOCK);
-
-    sockaddr_rc_k addr{};
-    addr.rc_family = AF_BLUETOOTH;
-    addr.rc_bdaddr = bd;
-    addr.rc_channel = static_cast<uint8_t>(channel);
-
-    int rc = ::connect(fd.get(), reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
-    if (rc < 0 && errno != EINPROGRESS && errno != EAGAIN) {
-        return std::nullopt;
-    }
-    if (rc < 0) {
-        pollfd pfd{fd.get(), POLLOUT, 0};
-        if (::poll(&pfd, 1, timeoutMs) <= 0 || !(pfd.revents & POLLOUT)) {
-            return std::nullopt;
-        }
-        int soErr = 0;
-        socklen_t len = sizeof(soErr);
-        if (::getsockopt(fd.get(), SOL_SOCKET, SO_ERROR, &soErr, &len) < 0 || soErr != 0) {
-            return std::nullopt;
-        }
-    }
-
-    ::fcntl(fd.get(), F_SETFL, origFlags & ~O_NONBLOCK);
 
     if (!sendAll(fd.get(), buildHandshake())) {
         return std::nullopt;
@@ -146,13 +119,11 @@ std::optional<RfcommConnection> tryConnectAndHandshake(const QString& mac, int c
     char buf[1024];
     while (timer.elapsed() < 1500) {
         const int rem = std::max(50, static_cast<int>(1500 - timer.elapsed()));
-        pollfd pfd{fd.get(), POLLIN, 0};
-        const int pr = ::poll(&pfd, 1, rem);
+        const int pr = pollSocketRead(fd.get(), rem);
         if (pr <= 0) break;
-        if (pfd.revents & (POLLERR | POLLHUP)) break;
-        const ssize_t n = ::recv(fd.get(), buf, sizeof(buf), 0);
+        const qint64 n = recvSocket(fd.get(), buf, sizeof(buf));
         if (n <= 0) break;
-        const QByteArray chunk(buf, n);
+        const QByteArray chunk(buf, static_cast<qsizetype>(n));
         leftover.append(chunk);
         const auto frames = decoder.feed(chunk);
         for (const auto& f : frames) {
@@ -169,6 +140,7 @@ class SdpProfileReceiver : public QObject {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "org.bluez.Profile1")
 public:
+    int dupedFd = -1;
     int discoveredChannel = -1;
     QEventLoop* loop = nullptr;
 
@@ -178,18 +150,24 @@ public Q_SLOTS:
     void NewConnection(const QDBusObjectPath&, const QDBusUnixFileDescriptor& fd, const QVariantMap&) {
         if (fd.isValid()) {
             discoveredChannel = getRfcommPeerChannel(fd.fileDescriptor());
+            dupedFd = ::fcntl(fd.fileDescriptor(), F_DUPFD_CLOEXEC, 0);
         }
         if (loop) loop->quit();
     }
 };
 
-std::optional<int> discoverChannelViaBluezSdp(const QString& devPath) {
-    if (devPath.isEmpty() || !QCoreApplication::instance()) return std::nullopt;
+std::optional<int> discoverChannelViaBluezSdp(const QString& devPath,
+                                              const QString& uuidStr,
+                                              UniqueSocket* outConnectedSock,
+                                              int timeoutMs) {
+    if (devPath.isEmpty() || uuidStr.isEmpty() || !QCoreApplication::instance()) return std::nullopt;
 
     QDBusConnection bus = QDBusConnection::systemBus();
     if (!bus.isConnected()) return std::nullopt;
 
-    const QString profPath = QStringLiteral("/io/kalm/sdp_%1").arg(QCoreApplication::applicationPid());
+    static int s_seq = 0;
+    const QString profPath =
+        QStringLiteral("/io/kalm/sdp_%1_%2").arg(QCoreApplication::applicationPid()).arg(++s_seq);
     SdpProfileReceiver receiver;
     QEventLoop loop;
     receiver.loop = &loop;
@@ -209,7 +187,7 @@ std::optional<int> discoverChannelViaBluezSdp(const QString& devPath) {
         QStringLiteral("org.bluez.ProfileManager1"),
         QStringLiteral("RegisterProfile"));
     regMsg << QVariant::fromValue(QDBusObjectPath(profPath))
-           << QString::fromLatin1(kVivoGaiaUuid)
+           << uuidStr.toLower()
            << opts;
     const QDBusMessage regReply = bus.call(regMsg, QDBus::Block, 2000);
     if (regReply.type() == QDBusMessage::ErrorMessage) {
@@ -222,12 +200,22 @@ std::optional<int> discoverChannelViaBluezSdp(const QString& devPath) {
         devPath,
         QStringLiteral("org.bluez.Device1"),
         QStringLiteral("ConnectProfile"));
-    connMsg << QString::fromLatin1(kVivoGaiaUuid);
-    bus.callWithCallback(connMsg, &loop, SLOT(quit()), SLOT(quit()), 3500);
+    connMsg << uuidStr.toLower();
+    bus.callWithCallback(connMsg, &loop, SLOT(quit()), SLOT(quit()), timeoutMs);
 
-    QTimer::singleShot(3500, &loop, &QEventLoop::quit);
+    QTimer::singleShot(timeoutMs, &loop, &QEventLoop::quit);
     loop.exec();
 
+    if (outConnectedSock && receiver.dupedFd >= 0) {
+        outConnectedSock->reset(receiver.dupedFd);
+        receiver.dupedFd = -1;
+    } else if (receiver.dupedFd >= 0) {
+        ::close(receiver.dupedFd);
+        receiver.dupedFd = -1;
+    }
+
+    // Note: UnregisterProfile closes BlueZ's side ONLY if not duped or if profile disconnects;
+    // when outConnectedSock is null we only wanted channel discovery so unregister immediately.
     QDBusMessage unregMsg = QDBusMessage::createMethodCall(
         QStringLiteral("org.bluez"),
         QStringLiteral("/org/bluez"),
@@ -243,28 +231,97 @@ std::optional<int> discoverChannelViaBluezSdp(const QString& devPath) {
 
 }  // namespace
 
-bool BluezDevice::isVivoTws() const {
-    for (const QString& u : uuids) {
-        const QString low = u.toLower();
-        if (low == QLatin1String(kVivoGaiaUuid) || low == QLatin1String(kGattServiceUuid)) {
-            return true;
-        }
-    }
-    const QString lowName = name.toLower();
-    return lowName.contains(u"vivo tws") || lowName.contains(u"iqoo tws") ||
-           lowName.contains(u"vivo headphones");
+void closeSocketHandle(SocketHandle s) noexcept {
+    if (s >= 0) ::close(s);
 }
 
-bool BluezDevice::isAudioDevice() const {
-    if (isVivoTws()) return true;
-    const QString lowIcon = icon.toLower();
-    if (lowIcon.contains(u"audio") || lowIcon.contains(u"headset") || lowIcon.contains(u"headphone")) {
-        return true;
+void shutdownSocketHandle(SocketHandle s) noexcept {
+    if (s >= 0) ::shutdown(s, SHUT_RDWR);
+}
+
+int pollSocketRead(SocketHandle s, int timeoutMs) noexcept {
+    if (s < 0) return -1;
+    pollfd pfd{s, POLLIN, 0};
+    for (;;) {
+        const int pr = ::poll(&pfd, 1, timeoutMs);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) return 0;
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            if (pfd.revents & POLLIN) return 1;
+            return -1;
+        }
+        return (pfd.revents & POLLIN) ? 1 : 0;
     }
-    for (const QString& u : uuids) {
-        if (u.toLower() == QLatin1String(kAudioSinkUuid)) return true;
+}
+
+qint64 recvSocket(SocketHandle s, char* buf, size_t maxLen) noexcept {
+    if (s < 0) return -1;
+    for (;;) {
+        const ssize_t n = ::recv(s, buf, maxLen, 0);
+        if (n < 0 && errno == EINTR) continue;
+        return static_cast<qint64>(n);
     }
-    return false;
+}
+
+bool sendAll(SocketHandle s, const QByteArray& data) {
+    if (s < 0) return false;
+    qsizetype sent = 0;
+    while (sent < data.size()) {
+        const ssize_t n = ::send(s, data.constData() + sent,
+                                 static_cast<size_t>(data.size() - sent), MSG_NOSIGNAL);
+        if (n <= 0) {
+            if (n < 0 && errno == EINTR) continue;
+            return false;
+        }
+        sent += n;
+    }
+    return true;
+}
+
+SocketHandle openLocalIpcClient(const QString& path) {
+    const QByteArray pathUtf8 = path.toUtf8();
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    if (static_cast<size_t>(pathUtf8.size()) >= sizeof(addr.sun_path)) return kInvalidSocket;
+    std::memcpy(addr.sun_path, pathUtf8.constData(), static_cast<size_t>(pathUtf8.size()));
+
+    UniqueSocket fd(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
+    if (!fd) return kInvalidSocket;
+    if (::connect(fd.get(), reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
+        return kInvalidSocket;
+    }
+    return fd.release();
+}
+
+SocketHandle openLocalIpcServer(const QString& path) {
+    const QByteArray pathUtf8 = path.toUtf8();
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    if (static_cast<size_t>(pathUtf8.size()) >= sizeof(addr.sun_path)) return kInvalidSocket;
+    std::memcpy(addr.sun_path, pathUtf8.constData(), static_cast<size_t>(pathUtf8.size()));
+
+    UniqueSocket fd(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
+    if (!fd) return kInvalidSocket;
+    if (::bind(fd.get(), reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
+        return kInvalidSocket;
+    }
+    ::chmod(pathUtf8.constData(), 0600);
+    if (::listen(fd.get(), 8) < 0) {
+        return kInvalidSocket;
+    }
+    return fd.release();
+}
+
+SocketHandle acceptLocalIpcClient(SocketHandle serverSock) {
+    if (serverSock < 0) return kInvalidSocket;
+    for (;;) {
+        const int c = ::accept4(serverSock, nullptr, nullptr, SOCK_CLOEXEC);
+        if (c < 0 && errno == EINTR) continue;
+        return (c >= 0) ? c : kInvalidSocket;
+    }
 }
 
 QList<BluezDevice> listBluezDevices(bool onlyVivo, bool onlyAudio) {
@@ -329,28 +386,20 @@ QList<BluezDevice> listBluezDevices(bool onlyVivo, bool onlyAudio) {
             item.batteryPct = battProps.value(QStringLiteral("Percentage")).toInt();
         }
 
-        if (onlyVivo && !item.isVivoTws()) continue;
+        if (onlyVivo && !item.isSupportedTws()) continue;
         if (onlyAudio && !item.isAudioDevice()) continue;
         result.append(std::move(item));
     }
     rootArg.endMap();
 
     std::sort(result.begin(), result.end(), [](const BluezDevice& a, const BluezDevice& b) {
-        if (a.isVivoTws() != b.isVivoTws()) return a.isVivoTws() > b.isVivoTws();
+        if (a.isSupportedTws() != b.isSupportedTws()) return a.isSupportedTws() > b.isSupportedTws();
         if (a.connected != b.connected) return a.connected > b.connected;
         if (a.paired != b.paired) return a.paired > b.paired;
         return a.name.toLower() < b.name.toLower();
     });
 
     return result;
-}
-
-std::optional<BluezDevice> findBluezByMac(const QString& mac) {
-    const QString norm = mac.trimmed().toUpper();
-    for (const auto& d : listBluezDevices(false, false)) {
-        if (d.mac == norm) return d;
-    }
-    return std::nullopt;
 }
 
 bool connectBluezDevice(const QString& mac) {
@@ -366,28 +415,63 @@ bool connectBluezDevice(const QString& mac) {
     return reply.type() == QDBusMessage::ReplyMessage;
 }
 
-int getRfcommPeerChannel(int fd) noexcept {
-    if (fd < 0) return -1;
+int getRfcommPeerChannel(SocketHandle s) noexcept {
+    if (s < 0) return -1;
     sockaddr_rc_k peer{};
     socklen_t len = sizeof(peer);
-    if (::getpeername(fd, reinterpret_cast<sockaddr*>(&peer), &len) == 0) {
+    if (::getpeername(s, reinterpret_cast<sockaddr*>(&peer), &len) == 0) {
         return static_cast<int>(peer.rc_channel);
     }
     return -1;
 }
 
-bool sendAll(int fd, const QByteArray& data) {
-    qsizetype sent = 0;
-    while (sent < data.size()) {
-        const ssize_t n = ::send(fd, data.constData() + sent,
-                                 static_cast<size_t>(data.size() - sent), MSG_NOSIGNAL);
-        if (n <= 0) {
-            if (n < 0 && errno == EINTR) continue;
-            return false;
-        }
-        sent += n;
+UniqueSocket openRfcommByChannel(const QString& mac, int channel, int timeoutMs) {
+    if (channel < 1 || channel > 30) return {};
+    bdaddr_k bd{};
+    if (!parseMacToBdaddr(mac, bd)) return {};
+
+    UniqueSocket fd(::socket(AF_BLUETOOTH, SOCK_STREAM | SOCK_CLOEXEC, BTPROTO_RFCOMM));
+    if (!fd) return {};
+
+    const int origFlags = ::fcntl(fd.get(), F_GETFL, 0);
+    ::fcntl(fd.get(), F_SETFL, origFlags | O_NONBLOCK);
+
+    sockaddr_rc_k addr{};
+    addr.rc_family = AF_BLUETOOTH;
+    addr.rc_bdaddr = bd;
+    addr.rc_channel = static_cast<uint8_t>(channel);
+
+    const int rc = ::connect(fd.get(), reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
+    if (rc < 0 && errno != EINPROGRESS && errno != EAGAIN) {
+        return {};
     }
-    return true;
+    if (rc < 0) {
+        pollfd pfd{fd.get(), POLLOUT, 0};
+        if (::poll(&pfd, 1, timeoutMs) <= 0 || !(pfd.revents & POLLOUT)) {
+            return {};
+        }
+        int soErr = 0;
+        socklen_t len = sizeof(soErr);
+        if (::getsockopt(fd.get(), SOL_SOCKET, SO_ERROR, &soErr, &len) < 0 || soErr != 0) {
+            return {};
+        }
+    }
+
+    ::fcntl(fd.get(), F_SETFL, origFlags & ~O_NONBLOCK);
+    return fd;
+}
+
+UniqueSocket openRfcommByUuid(const QString& mac,
+                              const QString& devPath,
+                              const QString& uuidStr,
+                              int timeoutMs) {
+    const auto sdpCh = discoverChannelViaBluezSdp(devPath, uuidStr, nullptr, timeoutMs);
+    if (sdpCh && *sdpCh > 0) {
+        // Give the remote Bluetooth stack a brief moment after BlueZ Profile1 teardown
+        ::usleep(250 * 1000);
+        return openRfcommByChannel(mac, *sdpCh, timeoutMs);
+    }
+    return {};
 }
 
 RfcommConnection openGaiaRfcomm(const QString& mac, const QString& devPath,
@@ -409,7 +493,7 @@ RfcommConnection openGaiaRfcomm(const QString& mac, const QString& devPath,
         }
     }
 
-    std::optional<int> sdpCh = discoverChannelViaBluezSdp(devPath);
+    std::optional<int> sdpCh = discoverChannelViaBluezSdp(devPath, QString::fromLatin1(kVivoGaiaUuid), nullptr, 3500);
     if (sdpCh) {
         if (auto res = tryConnectAndHandshake(normMac, *sdpCh, timeoutMs)) {
             saveCachedChannel(normMac, *sdpCh);
@@ -431,4 +515,4 @@ RfcommConnection openGaiaRfcomm(const QString& mac, const QString& devPath,
 
 }  // namespace kalm
 
-#include "transport.moc"
+#include "transport_linux.moc"

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "protocol.hpp"
 
+#include "huawei.hpp"
 #include "i18n.hpp"
 
 #include <QDir>
@@ -351,17 +352,24 @@ QJsonObject EarbudState::toJson() const {
     QString fullModeLabel;
     if (noiseMode) {
         fullModeLabel = noiseModeLabel(*noiseMode);
-        if (*noiseMode == NoiseMode::Anc && noiseEffect) {
-            const QString sub = ancLevelLabel(*noiseEffect);
-            if (!sub.isEmpty()) fullModeLabel += QStringLiteral(" (%1)").arg(sub);
-        } else if (*noiseMode == NoiseMode::Transparency && transparencyEffect) {
-            const QString sub = transparencyLabel(*transparencyEffect);
-            if (!sub.isEmpty()) fullModeLabel += QStringLiteral(" (%1)").arg(sub);
+        if (protocol == DeviceProtocol::VivoGaia || protocol == DeviceProtocol::HuaweiSpp) {
+            if (*noiseMode == NoiseMode::Anc && noiseEffect) {
+                const QString sub = ancLevelLabel(*noiseEffect);
+                if (!sub.isEmpty()) fullModeLabel += QStringLiteral(" (%1)").arg(sub);
+            } else if (*noiseMode == NoiseMode::Transparency && transparencyEffect) {
+                const QString sub = transparencyLabel(*transparencyEffect);
+                if (!sub.isEmpty()) fullModeLabel += QStringLiteral(" (%1)").arg(sub);
+            }
         }
     }
 
+    QString protoStr = QStringLiteral("vivo_gaia");
+    if (protocol == DeviceProtocol::RealmeOppoTl) protoStr = QStringLiteral("realme_tl");
+    else if (protocol == DeviceProtocol::HuaweiSpp) protoStr = QStringLiteral("huawei_spp");
+
     return QJsonObject{
         {QStringLiteral("connected"), connected},
+        {QStringLiteral("protocol"), protoStr},
         {QStringLiteral("device_name"), deviceName},
         {QStringLiteral("device_mac"), deviceMac},
         {QStringLiteral("firmware"), firmware.isEmpty() ? QJsonValue() : QJsonValue(firmware)},
@@ -376,7 +384,11 @@ QJsonObject EarbudState::toJson() const {
         {QStringLiteral("battery"), batt},
         {QStringLiteral("wear"), wear},
         {QStringLiteral("audio_effect"), optInt(audioEffect)},
-        {QStringLiteral("audio_effect_label"), audioEffect ? QJsonValue(audioEffectLabel(*audioEffect)) : QJsonValue()},
+        {QStringLiteral("audio_effect_label"),
+         audioEffect ? QJsonValue(protocol == DeviceProtocol::HuaweiSpp
+                                      ? huawei::eqPresetLabel(*audioEffect)
+                                      : audioEffectLabel(*audioEffect))
+                     : QJsonValue()},
         {QStringLiteral("low_latency"), optBool(lowLatency)},
         {QStringLiteral("noise_cycle"), nc},
         {QStringLiteral("paired_devices"), devs},
@@ -698,6 +710,282 @@ QString applyFrameToState(const Frame& frame, EarbudState& state) {
     if (cmd == kCmdPeerTimeRequest) return QStringLiteral("time_request");
     if (cmd == kCmdAckFindDevice) return QStringLiteral("find_device");
     return QStringLiteral("other");
+}
+
+// ---- OPPO / OnePlus / realme Link "TL" (OPPOv1Wrapper 0xAA) Implementation ----
+
+namespace {
+
+std::optional<NoiseMode> decodeRealmeNoiseValue(uint8_t val) {
+    if (val == 0x01) return NoiseMode::Off;
+    if (val == 0x02) return NoiseMode::Transparency;
+    if (val == 0x08 || val == 0x04 || val == 0x10 || val == 0x20) return NoiseMode::Anc;
+    return std::nullopt;
+}
+
+bool parseRealmeBatteryTable(const QByteArray& p, int countOffset, EarbudState& state) {
+    if (countOffset >= p.size()) return false;
+    const int count = static_cast<uint8_t>(p[countOffset]);
+    bool seenL = false, seenR = false, seenC = false;
+    for (int i = 0; i < count; ++i) {
+        const int off = countOffset + 1 + i * 2;
+        if (off + 2 > p.size()) break;
+        const uint8_t compId = static_cast<uint8_t>(p[off]);
+        const uint8_t raw = static_cast<uint8_t>(p[off + 1]);
+        const int lvl = raw & 0x7F;
+        const bool chg = (raw & 0x80) != 0;
+
+        if (compId == 1 && lvl <= 100) {
+            state.leftBattery = BatteryReading{lvl, chg, false};
+            seenL = true;
+        } else if (compId == 2 && lvl <= 100) {
+            state.rightBattery = BatteryReading{lvl, chg, false};
+            seenR = true;
+        } else if (compId == 3) {
+            // Case inactive normalization: 03 00 (level=0, !charging) means case closed/unavailable
+            if (lvl > 0 && lvl <= 100) {
+                state.caseBattery = BatteryReading{lvl, chg, false};
+                seenC = true;
+            } else if (lvl == 0 && chg) {
+                state.caseBattery = BatteryReading{0, true, false};
+                seenC = true;
+            }
+        }
+    }
+    if (!seenL) state.leftBattery = BatteryReading{std::nullopt, false, true};
+    if (!seenR) state.rightBattery = BatteryReading{std::nullopt, false, true};
+    if (!seenC) state.caseBattery = BatteryReading{std::nullopt, false, true};
+    return true;
+}
+
+QString parseRealmeEventBody(int offset, const QByteArray& p, EarbudState& state) {
+    if (offset >= p.size()) return QStringLiteral("ignored");
+    const uint8_t ev = static_cast<uint8_t>(p[offset]);
+    const int dataOff = offset + 1;
+    const int rem = static_cast<int>(p.size()) - dataOff;
+
+    if (ev == 1 && rem >= 1) {
+        return parseRealmeBatteryTable(p, dataOff, state) ? QStringLiteral("battery") : QStringLiteral("ignored");
+    }
+
+    if (ev == 3 && rem >= 2) {
+        // NotificationCommandManager.k(case 3):
+        // rem == 2 -> [type, noiseValue] (action implicitly 1)
+        // rem >= 3 -> [action, type, noiseValue] (action 1 = active ANC mode; action 2 = cycle config)
+        uint8_t action = 1;
+        uint8_t noiseVal = 0;
+        if (rem == 2) {
+            noiseVal = static_cast<uint8_t>(p[dataOff + 1]);
+        } else {
+            action = static_cast<uint8_t>(p[dataOff]);
+            noiseVal = static_cast<uint8_t>(p[dataOff + 2]);
+        }
+        if (action == 1) {
+            if (auto m = decodeRealmeNoiseValue(noiseVal)) {
+                state.noiseMode = *m;
+                return QStringLiteral("noise_mode");
+            }
+        }
+        return QStringLiteral("ignored");
+    }
+
+    return QStringLiteral("event_refresh");
+}
+
+}  // namespace
+
+QByteArray buildRealmeOppoPacket(uint16_t cmd, uint8_t seq, const QByteArray& payload) {
+    QByteArray inner(5 + payload.size(), Qt::Uninitialized);
+    inner[0] = static_cast<char>(cmd & 0xFF);
+    inner[1] = static_cast<char>((cmd >> 8) & 0xFF);
+    inner[2] = static_cast<char>(seq);
+    inner[3] = static_cast<char>(payload.size() & 0xFF);
+    inner[4] = static_cast<char>((payload.size() >> 8) & 0xFF);
+    if (!payload.isEmpty()) {
+        std::memcpy(inner.data() + 5, payload.constData(), static_cast<size_t>(payload.size()));
+    }
+
+    const int linkLen = static_cast<int>(inner.size()) + 2;
+    QByteArray out;
+    out.reserve(4 + inner.size());
+    out.append(static_cast<char>(0xAA));
+    if (linkLen <= 127) {
+        out.append(static_cast<char>(linkLen & 0x7F));
+    } else {
+        out.append(static_cast<char>((linkLen & 0x7F) | 0x80));
+        out.append(static_cast<char>((linkLen >> 7) & 0x7F));
+    }
+    out.append('\x00');
+    out.append('\x00');
+    out.append(inner);
+    return out;
+}
+
+QList<RealmeOppoFrame> RealmeOppoDecoder::feed(const QByteArray& chunk) {
+    if (!chunk.isEmpty()) m_buf.append(chunk);
+    QList<RealmeOppoFrame> frames;
+    while (true) {
+        const qsizetype idx = m_buf.indexOf(static_cast<char>(0xAA));
+        if (idx < 0) {
+            m_buf.clear();
+            break;
+        }
+        if (idx > 0) m_buf.remove(0, idx);
+        if (m_buf.size() < 4) break;
+
+        int linkLen = 0;
+        int lenBytes = 0;
+        if ((static_cast<uint8_t>(m_buf[1]) & 0x80) == 0) {
+            linkLen = static_cast<uint8_t>(m_buf[1]) & 0x7F;
+            lenBytes = 1;
+        } else {
+            if (m_buf.size() < 5) break;
+            linkLen = (static_cast<uint8_t>(m_buf[1]) & 0x7F) |
+                      ((static_cast<int>(static_cast<uint8_t>(m_buf[2])) & 0x7F) << 7);
+            lenBytes = 2;
+        }
+
+        const qsizetype totalLen = 1 + lenBytes + linkLen;
+        if (totalLen < 9 || totalLen > kMaxFrameBytes) {
+            m_buf.remove(0, 1);
+            continue;
+        }
+        if (m_buf.size() < totalLen) break;
+
+        const QByteArray raw = m_buf.left(totalLen);
+        m_buf.remove(0, totalLen);
+
+        const uint8_t fsnFlags = static_cast<uint8_t>(raw[1 + lenBytes]) & 0x03;
+        const qsizetype innerOffset = 1 + lenBytes + ((fsnFlags == 0) ? 2 : 3);
+        const qsizetype innerLen = totalLen - innerOffset;
+        if (innerLen < 5) continue;
+
+        const uint16_t cmd = static_cast<uint8_t>(raw[innerOffset]) |
+                             (static_cast<uint16_t>(static_cast<uint8_t>(raw[innerOffset + 1])) << 8);
+        const uint8_t seq = static_cast<uint8_t>(raw[innerOffset + 2]);
+        const uint16_t dlen = static_cast<uint8_t>(raw[innerOffset + 3]) |
+                              (static_cast<uint16_t>(static_cast<uint8_t>(raw[innerOffset + 4])) << 8);
+        const qsizetype avail = std::min<qsizetype>(dlen, innerLen - 5);
+
+        RealmeOppoFrame f;
+        f.command = cmd;
+        f.seq = seq;
+        f.payload = raw.mid(innerOffset + 5, avail);
+        f.raw = raw;
+        frames.append(std::move(f));
+    }
+    return frames;
+}
+
+QList<RealmeOppoFrame> parseRealmeOppoFrames(const QByteArray& data) {
+    RealmeOppoDecoder dec;
+    return dec.feed(data);
+}
+
+QByteArray buildRealmeSetNoise(NoiseMode mode, uint8_t seq) {
+    uint8_t noiseStatus = 0x01;
+    if (mode == NoiseMode::Anc) noiseStatus = 0x08;
+    else if (mode == NoiseMode::Transparency) noiseStatus = 0x02;
+    QByteArray payload(3, '\x01');
+    payload[0] = '\x01';
+    payload[1] = '\x01';
+    payload[2] = static_cast<char>(noiseStatus);
+    return buildRealmeOppoPacket(kTlCmdSetNoise, seq, payload);
+}
+
+QString applyRealmeFrameToState(const RealmeOppoFrame& frame, EarbudState& state) {
+    const QByteArray& p = frame.payload;
+    const uint16_t cmd = frame.command;
+
+    if (cmd == kTlRespGetCapabilities) {
+        return QStringLiteral("handshake");
+    }
+
+    if (cmd == kTlRespGetFirmware) {
+        // Payload: [status=0x00, count, "1,2,1.1.0.054,2,2,1.1.0.054,3,2,022"]
+        if (p.size() > 2 && static_cast<uint8_t>(p[0]) == 0) {
+            const QString csv = QString::fromUtf8(p.mid(2));
+            const QStringList parts = csv.split(u',');
+            for (const QString& tok : parts) {
+                if (tok.contains(u'.') && tok.size() >= 3) {
+                    state.firmware = tok.trimmed();
+                    return QStringLiteral("firmware");
+                }
+            }
+        }
+        return QStringLiteral("ignored");
+    }
+
+    if (cmd == kTlRespGetBattery) {
+        if (p.size() >= 2 && static_cast<uint8_t>(p[0]) == 0) {
+            return parseRealmeBatteryTable(p, 1, state) ? QStringLiteral("battery") : QStringLiteral("ignored");
+        }
+        return QStringLiteral("ignored");
+    }
+
+    if (cmd == kTlRespGetNoise) {
+        // Valid NoiseReductionInfo requires >= 4 bytes: [status=0x00, action=0x01, type, noiseValue].
+        // A 2-byte [00 02] reply is an unsupported-command stub and must NEVER overwrite noiseMode!
+        if (p.size() >= 4 && static_cast<uint8_t>(p[0]) == 0 && static_cast<uint8_t>(p[1]) == 1) {
+            if (auto m = decodeRealmeNoiseValue(static_cast<uint8_t>(p[3]))) {
+                state.noiseMode = *m;
+                return QStringLiteral("noise_mode");
+            }
+        }
+        return QStringLiteral("ignored");
+    }
+
+    if (cmd == kTlRespQueryNotify) {
+        // 0x8202: response to 0x0202 [eventId] -> [status=0x00, eventId, ...body]
+        if (p.size() >= 2 && static_cast<uint8_t>(p[0]) == 0) {
+            return parseRealmeEventBody(1, p, state);
+        }
+        return QStringLiteral("ignored");
+    }
+
+    if (cmd == kTlCmdPushNotify) {
+        // 0x0204: live push notification from earbuds -> [eventId, ...body]
+        return parseRealmeEventBody(0, p, state);
+    }
+
+    if (cmd == kTlRespGetNotifyCaps || cmd == kTlRespRegNotify) {
+        return QStringLiteral("ignored");
+    }
+
+    if (cmd == kTlRespSetNoise) {
+        if (!p.isEmpty() && static_cast<uint8_t>(p[0]) == 0) {
+            return QStringLiteral("noise_ack");
+        }
+        return QStringLiteral("ignored");
+    }
+
+    if (cmd == kTlRespGetSwitches) {
+        // Payload: [00, count, (featId, status) * count]; featId 7 = Game Mode
+        if (p.size() >= 2 && static_cast<uint8_t>(p[0]) == 0) {
+            const int count = static_cast<uint8_t>(p[1]);
+            for (int i = 0; i < count; ++i) {
+                const int off = 2 + i * 2;
+                if (off + 2 > p.size()) break;
+                if (static_cast<uint8_t>(p[off]) == 7) {
+                    state.lowLatency = (static_cast<uint8_t>(p[off + 1]) != 0);
+                    return QStringLiteral("low_latency");
+                }
+            }
+        }
+        return QStringLiteral("ignored");
+    }
+
+    if (cmd == kTlCmdNotification || cmd == kTlRespNotification) {
+        // Push event: event 0x03 = ANC changed on earbud stem; also trigger snapshot refresh
+        if (p.size() >= 2 && static_cast<uint8_t>(p[0]) == 0x03) {
+            if (auto m = decodeRealmeNoiseValue(static_cast<uint8_t>(p.back()))) {
+                state.noiseMode = *m;
+            }
+        }
+        return QStringLiteral("event_refresh");
+    }
+
+    return QStringLiteral("event_refresh");
 }
 
 }  // namespace kalm

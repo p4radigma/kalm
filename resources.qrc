@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file>qml/Main.qml</file>
+        <file>qml/MainWin.qml</file>
         <file>models.json</file>
         <file>translations/en.json</file>
         <file>translations/ru.json</file>

@@ -1,5 +1,5 @@
-name: New Earbud Model Support
-description: Request support for a vivo / iQOO (or compatible GAIA) earbud model
+name: New Wireless Earbuds Support
+description: Request support for a wireless earbuds / headphones model
 title: "[Device Support]: "
 labels: ["device-support"]
 body:
@@ -12,11 +12,25 @@ body:
   - type: input
     id: model
     attributes:
-      label: Earbud Model Name
-      description: Exact commercial name and Bluetooth name (if different)
-      placeholder: e.g. vivo TWS 5 Pro / iQOO TWS 2
+      label: Brand & Model Name
+      description: Exact brand, commercial model name, and Bluetooth name (if different)
+      placeholder: e.g. Sony WF-1000XM5 / OnePlus Buds 3 / vivo TWS 5 Pro
     validations:
       required: true
+
+  - type: input
+    id: companion_app
+    attributes:
+      label: Official Mobile Companion App
+      description: Name or package ID of the official Android/iOS app used to configure these earbuds
+      placeholder: e.g. Sound Connect / HeyMelody / vivo Earphones
+
+  - type: input
+    id: companion_app_url
+    attributes:
+      label: Companion App Link (APK / Store / Official Page)
+      description: Direct link to the official companion app (Google Play, vendor download page, APKMirror, etc.) to help inspect the protocol
+      placeholder: e.g. https://play.google.com/store/apps/details?id=...
 
   - type: input
     id: firmware

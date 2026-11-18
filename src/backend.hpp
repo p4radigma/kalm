@@ -26,12 +26,14 @@ QIcon makeKalmIcon(bool connected, std::optional<NoiseMode> mode);
 class KalmBackend : public QObject {
     Q_OBJECT
 
+    Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
     Q_PROPERTY(QVariantMap i18n READ i18n NOTIFY languageChanged)
     Q_PROPERTY(QVariantList languageModel READ languageModel NOTIFY languageChanged)
     Q_PROPERTY(int languageIndex READ languageIndex NOTIFY languageChanged)
 
     Q_PROPERTY(bool quitting READ quitting NOTIFY quittingChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
+    Q_PROPERTY(bool vivoFeatures READ vivoFeatures NOTIFY stateChanged)
     Q_PROPERTY(QString deviceName READ deviceName NOTIFY stateChanged)
     Q_PROPERTY(QString deviceMac READ deviceMac NOTIFY stateChanged)
     Q_PROPERTY(QString firmware READ firmware NOTIFY stateChanged)
@@ -59,6 +61,17 @@ class KalmBackend : public QObject {
     Q_PROPERTY(bool wearDetection READ wearDetection NOTIFY stateChanged)
     Q_PROPERTY(bool isRinging READ isRinging NOTIFY ringingChanged)
 
+    Q_PROPERTY(bool supportsAncLevels READ supportsAncLevels NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool supportsTransEffects READ supportsTransEffects NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool supportsEq READ supportsEq NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool supportsGameMode READ supportsGameMode NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool supportsWearDetection READ supportsWearDetection NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool supportsNoiseCycle READ supportsNoiseCycle NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool supportsMultipoint READ supportsMultipoint NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool supportsFindDevice READ supportsFindDevice NOTIFY capabilitiesChanged)
+    Q_PROPERTY(bool supportsProbe READ supportsProbe NOTIFY capabilitiesChanged)
+    Q_PROPERTY(QString protocolLabel READ protocolLabel NOTIFY capabilitiesChanged)
+
     Q_PROPERTY(QVariantList multipointDevices READ multipointDevices NOTIFY stateChanged)
     Q_PROPERTY(QVariantList savedDevices READ savedDevices NOTIFY devicesChanged)
     Q_PROPERTY(QVariantList discoveredDevices READ discoveredDevices NOTIFY discoveredChanged)
@@ -80,12 +93,14 @@ public:
     void pushErrorFromWorker(const QString& msg);
     void pushShowFromWorker(const QString& activationToken = {});
 
+    QString appVersion() const;
     QVariantMap i18n() const;
     QVariantList languageModel() const { return m_languageModel; }
     int languageIndex() const;
 
     bool quitting() const { return m_quitting; }
     bool connected() const { return m_state.connected; }
+    bool vivoFeatures() const { return !m_state.connected || m_state.protocol == DeviceProtocol::VivoGaia; }
     QString deviceName() const;
     QString deviceMac() const { return m_state.deviceMac; }
     QString firmware() const { return m_state.firmware; }
@@ -112,6 +127,21 @@ public:
     bool gameMode() const { return m_state.lowLatency.value_or(false); }
     bool wearDetection() const { return m_state.wearDetection.value_or(false); }
     bool isRinging() const { return m_ringing; }
+
+    bool supportsAncLevels() const { return m_caps.ancLevels; }
+    bool supportsTransEffects() const { return m_caps.transparency; }
+    bool supportsEq() const { return m_caps.equalizer; }
+    bool supportsGameMode() const { return m_caps.gameMode; }
+    bool supportsWearDetection() const { return m_caps.wearDetection; }
+    bool supportsNoiseCycle() const { return m_caps.noiseCycle; }
+    bool supportsMultipoint() const { return m_caps.multipoint; }
+    bool supportsFindDevice() const { return m_caps.findDevice; }
+    bool supportsProbe() const { return m_caps.probe; }
+    QString protocolLabel() const { return m_caps.profileLabel; }
+
+    QString ancTextForCode(int code) const;
+    QString transTextForCode(int code) const;
+    QString eqTextForCode(int code) const;
 
     QVariantList multipointDevices() const;
     QVariantList savedDevices() const { return m_savedList; }
@@ -160,6 +190,7 @@ Q_SIGNALS:
     void probeChanged();
     void ringingChanged();
     void quittingChanged();
+    void capabilitiesChanged();
     void windowShowRequested();
 
 private:
@@ -171,6 +202,8 @@ private:
     DeviceRegistry& m_registry;
     QThreadPool m_pool;
     EarbudState m_state;
+    SessionCapabilities m_caps;
+    QString m_capsSignature;
     QVariantList m_languageModel;
     QVariantList m_ancLevelModel;
     QVariantList m_transEffectModel;
@@ -194,10 +227,12 @@ public:
 
     void bindWindow(QWindow* win) { m_window = win; }
     void hide() { m_tray.hide(); }
+    void showToast(const QString& title, const QString& body);
 
 private Q_SLOTS:
     void onActivated(QSystemTrayIcon::ActivationReason reason);
     void retranslateMenu();
+    void rebuildProtocolMenus();
     void syncState();
     void syncDevicesMenu();
 
@@ -215,10 +250,12 @@ private:
     QAction* m_actOff = nullptr;
     QMenu* m_ancLevelMenu = nullptr;
     QMap<int, QAction*> m_ancLevelActions;
+    QActionGroup* m_ancLevelGroup = nullptr;
     QMenu* m_devsMenu = nullptr;
     QActionGroup* m_devsGroup = nullptr;
     QMenu* m_eqMenu = nullptr;
     QMap<int, QAction*> m_eqActions;
+    QActionGroup* m_eqGroup = nullptr;
     QAction* m_gameAct = nullptr;
     QAction* m_openAct = nullptr;
     QAction* m_quitAct = nullptr;

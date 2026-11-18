@@ -14,7 +14,17 @@ namespace kalm {
 
 inline constexpr const char* kVivoGaiaUuid = "00000837-d102-11e1-9b23-00025b00a5a5";
 inline constexpr const char* kGattServiceUuid = "00001100-d102-11e1-9b23-00025b00a5a5";
+inline constexpr const char* kRealmeOppoTlUuid = "0000079a-d102-11e1-9b23-00025b00a5a5";
+inline constexpr const char* kOppoHeyMelodyUuid = "db764ac8-4b08-7f25-aafe-59d03c27bae3";
+inline constexpr const char* kOppoHeyMelodyAltUuid = "db764ac8-4b08-7f25-aafe-59d03c27bae4";
+inline constexpr const char* kStandardSppUuid = "00001101-0000-1000-8000-00805f9b34fb";
 inline constexpr const char* kAudioSinkUuid = "0000110b-0000-1000-8000-00805f9b34fb";
+
+enum class DeviceProtocol : uint8_t {
+    VivoGaia = 0,
+    RealmeOppoTl = 1,
+    HuaweiSpp = 2,
+};
 
 inline constexpr uint8_t kPreamble = 0xFF;
 inline constexpr uint8_t kFlagChecksum = 0x01;
@@ -145,6 +155,7 @@ struct MultiConnectDevice {
 
 struct EarbudState {
     bool connected = false;
+    DeviceProtocol protocol = DeviceProtocol::VivoGaia;
     QString deviceName;
     QString deviceMac;
     QString firmware;
@@ -208,5 +219,49 @@ QByteArray buildHostTimeResponse(const WireProfile& profile,
                                  const QDateTime& dt = QDateTime::currentDateTime());
 
 QString applyFrameToState(const Frame& frame, EarbudState& state);
+
+// ---- OPPO / OnePlus / realme Link "TL" (OPPOv1Wrapper 0xAA) Protocol ----
+
+inline constexpr uint16_t kTlCmdGetCapabilities = 0x0100;
+inline constexpr uint16_t kTlRespGetCapabilities = 0x8100;
+inline constexpr uint16_t kTlCmdGetFirmware = 0x0105;
+inline constexpr uint16_t kTlRespGetFirmware = 0x8105;
+inline constexpr uint16_t kTlCmdGetBattery = 0x0106;
+inline constexpr uint16_t kTlRespGetBattery = 0x8106;
+inline constexpr uint16_t kTlCmdGetNoise = 0x010B;
+inline constexpr uint16_t kTlRespGetNoise = 0x810B;
+inline constexpr uint16_t kTlCmdGetSwitches = 0x010D;
+inline constexpr uint16_t kTlRespGetSwitches = 0x810D;
+inline constexpr uint16_t kTlCmdGetNotifyCaps = 0x0200;
+inline constexpr uint16_t kTlRespGetNotifyCaps = 0x8200;
+inline constexpr uint16_t kTlCmdRegNotify = 0x0201;
+inline constexpr uint16_t kTlRespRegNotify = 0x8201;
+inline constexpr uint16_t kTlCmdQueryNotify = 0x0202;
+inline constexpr uint16_t kTlRespQueryNotify = 0x8202;
+inline constexpr uint16_t kTlCmdPushNotify = 0x0204;
+inline constexpr uint16_t kTlCmdNotification = 0x0400;
+inline constexpr uint16_t kTlRespNotification = 0x8400;
+inline constexpr uint16_t kTlCmdSetNoise = 0x0404;
+inline constexpr uint16_t kTlRespSetNoise = 0x8404;
+
+struct RealmeOppoFrame {
+    uint16_t command = 0;
+    uint8_t seq = 0;
+    QByteArray payload;
+    QByteArray raw;
+};
+
+class RealmeOppoDecoder {
+public:
+    QList<RealmeOppoFrame> feed(const QByteArray& chunk);
+
+private:
+    QByteArray m_buf;
+};
+
+QByteArray buildRealmeOppoPacket(uint16_t cmd, uint8_t seq = 0, const QByteArray& payload = {});
+QList<RealmeOppoFrame> parseRealmeOppoFrames(const QByteArray& data);
+QByteArray buildRealmeSetNoise(NoiseMode mode, uint8_t seq = 0);
+QString applyRealmeFrameToState(const RealmeOppoFrame& frame, EarbudState& state);
 
 }  // namespace kalm

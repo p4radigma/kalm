@@ -1,6 +1,6 @@
 # Kalm
 
-Native Linux desktop application (**C++20 / Qt 6 / KDE Kirigami**) for controlling active noise cancellation (ANC), sound profiles, and device settings on **vivo / iQOO TWS** earbuds (verified on *vivo TWS 5 Hi-Fi*) over Bluetooth RFCOMM (Compact GAIA protocol).
+Native desktop application (**C++20 / Qt 6**) for controlling active noise cancellation (ANC), sound profiles, and device settings on **vivo / iQOO TWS**, **HUAWEI FreeBuds / FreeLace**, and **realme / OPPO / OnePlus** earbuds (verified on *vivo TWS 5 Hi-Fi*, *HUAWEI FreeBuds 6i*, and *realme Buds T300*) over Bluetooth RFCOMM on **Windows 10/11** and **Linux**.
 
 > **Note:** This project was built with the assistance of AI and is intended primarily for personal use.
 
@@ -23,14 +23,19 @@ Native Linux desktop application (**C++20 / Qt 6 / KDE Kirigami**) for controlli
 
 ## Quick Start & Running
 
-**Option 1 — Self-Contained AppImage (no Qt6/Kirigami dependencies required):**
+**Windows 10 / 11 (x64 — no dependencies required):**
+Download from [Releases](https://github.com/p4radigma/kalm/releases):
+- **`Kalm-win64-setup.exe`** — single-file user installer (no admin rights required, optional Start Menu / Desktop / tray autostart), **or**
+- **`Kalm-win64-portable.zip`** — portable archive: extract anywhere and run `kalm.exe`.
+
+**Linux — Option 1 (Self-Contained AppImage, no Qt6/Kirigami dependencies required):**
 Download `Kalm-x86_64.AppImage` from [Releases](https://github.com/p4radigma/kalm/releases) (only BlueZ/Bluetooth is needed on the host):
 ```bash
 chmod +x Kalm-x86_64.AppImage
 ./Kalm-x86_64.AppImage
 ```
 
-**Option 2 — Lightweight Native Binary (~550 KB, uses system Qt6 & Kirigami):**
+**Linux — Option 2 (Lightweight Native Binary ~550 KB, uses system Qt6 & Kirigami):**
 Install runtime packages for your distro (see [Dependencies](#dependencies)), download `kalm-linux-x86_64` from [Releases](https://github.com/p4radigma/kalm/releases), and run:
 ```bash
 chmod +x kalm-linux-x86_64
@@ -63,6 +68,11 @@ kalm devices [list|scan|add <MAC> --alias <name>|use <name>|rename <name> <new>|
 | **Supported (GAIA v4 Profile)** | **vivo TWS 5**, **vivo TWS 5 Pro**, **vivo TWS 5e**, **vivo TWS 4**, **vivo TWS 4 Hi-Fi**, **vivo TWS 3**, **vivo TWS 3 Pro**, **iQOO TWS 5**, **iQOO TWS 5e**, **iQOO TWS 2**, **iQOO TWS 1**, **iQOO TWS 1e**, **vivo / iQOO Headphones** |
 | **Supported (GAIA v3 Profiles)** | **vivo TWS 3e**, **vivo TWS Air3 Pro**, **iQOO TWS Air3 Pro** |
 | **Battery / EQ / Multipoint Only** | Non-ANC GAIA models (*vivo TWS 5i / 3i / Air3 / Air2*, *iQOO TWS 5i / 1i / Air3*) |
+| **Verified on Hardware (HUAWEI SPP)** | **HUAWEI FreeBuds 6i** (ANC modes + levels including Dynamic, Transparency, battery per bud/case, EQ presets, Game Mode, auto-pause, dual-connect list) |
+| **Supported (HUAWEI SPP)** | Other **HUAWEI FreeBuds / FreeLace / Eyewear** models exposing the SPP service on channel 1 (features depend on the model) |
+| **Verified on Hardware (realme / OPPO Link)** | **realme Buds T300** (ANC / Transparency / Off, Left / Right / Case battery & charging, firmware, live push sync) |
+
+*HUAWEI devices are recognized by their Bluetooth name and use the SPP profile on RFCOMM channel 1. The protocol implementation was ported from the GPL-3 [OpenFreebuds](https://github.com/melianmiko/OpenFreebuds) project.*
 
 *Have another vivo / iQOO model? Run `kalm probe` and open a [New Earbud Model Support](#requesting-support-for-new-earbuds-what-users-need-to-do) issue.*
 
@@ -114,8 +124,16 @@ sudo xbps-install -S cmake gcc qt6-base-devel qt6-declarative-devel \
 
 ---
 
-## Build & Install (All Distros)
+## Build & Install
 
+**Windows (Visual Studio 2022 + Qt 6.8+ + CMake/Ninja):**
+```powershell
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+windeployqt --release --qmldir qml build/kalm.exe
+```
+
+**Linux (All Distros):**
 ```bash
 git clone https://github.com/p4radigma/kalm.git
 cd kalm

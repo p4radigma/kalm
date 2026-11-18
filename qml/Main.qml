@@ -4,6 +4,7 @@ import QtQuick.Controls as Controls
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
 import org.kde.kirigamiaddons.formcard as FormCard
+import org.kde.kirigamiaddons.delegates as Delegates
 
 Kirigami.ApplicationWindow {
     id: root
@@ -106,6 +107,7 @@ Kirigami.ApplicationWindow {
             Kirigami.Action {
                 text: root.i18n.action_probe
                 icon.name: "tools-report-bug"
+                visible: backend.supportsProbe
                 onTriggered: {
                     backend.runDiagnosticProbe()
                     probeDialog.open()
@@ -171,8 +173,56 @@ Kirigami.ApplicationWindow {
             }
         }
 
+        // ---- Centered Empty State When Disconnected ----
+        Item {
+            visible: !backend.connected
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.max(Kirigami.Units.gridUnit * 16, mainPage.height - Kirigami.Units.gridUnit * 6)
+
+            ColumnLayout {
+                anchors.centerIn: parent
+                width: Math.min(parent.width - Kirigami.Units.largeSpacing * 4, Kirigami.Units.gridUnit * 22)
+                spacing: Kirigami.Units.smallSpacing + 2
+
+                Kirigami.Icon {
+                    source: "audio-headset"
+                    Layout.alignment: Qt.AlignHCenter
+                    implicitWidth: Kirigami.Units.iconSizes.large
+                    implicitHeight: Kirigami.Units.iconSizes.large
+                    opacity: 0.45
+                }
+
+                Kirigami.Heading {
+                    level: 2
+                    text: root.i18n.empty_connect_title
+                    font.weight: Font.DemiBold
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+
+                Controls.Label {
+                    text: root.i18n.empty_connect_desc
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    opacity: 0.65
+                    Layout.fillWidth: true
+                }
+
+                Controls.Button {
+                    visible: backend.deviceMac.length > 0
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.topMargin: Kirigami.Units.smallSpacing
+                    text: root.i18n.action_connect_bt + " (" + backend.deviceName + ")"
+                    icon.name: "network-bluetooth-activated-symbolic"
+                    onClicked: backend.connectBluetoothDevice(backend.deviceMac)
+                }
+            }
+        }
+
         // ---- Connection Status Header Card (Centered) ----
         FormCard.FormCard {
+            visible: backend.connected
             maximumWidth: root.cardMaxW
             Layout.topMargin: Kirigami.Units.largeSpacing
 
@@ -222,6 +272,7 @@ Kirigami.ApplicationWindow {
 
         // ---- Battery Info Grid (Left / Right / Case) ----
         FormCard.FormGridContainer {
+            visible: backend.connected
             maximumWidth: root.cardMaxW
             Layout.fillWidth: true
             Layout.topMargin: Kirigami.Units.largeSpacing
@@ -244,6 +295,7 @@ Kirigami.ApplicationWindow {
 
         // ---- Primary Section: Noise Cancellation Selector + ANC Level / Transparency Mode ----
         FormCard.FormHeader {
+            visible: backend.connected
             maximumWidth: root.cardMaxW
             title: root.i18n.section_noise
             topPadding: Kirigami.Units.largeSpacing
@@ -251,6 +303,7 @@ Kirigami.ApplicationWindow {
         }
 
         FormCard.FormCard {
+            visible: backend.connected
             maximumWidth: root.cardMaxW
             enabled: backend.connected
 
@@ -364,12 +417,17 @@ Kirigami.ApplicationWindow {
             }
 
             FormCard.FormDelegateSeparator {
-                visible: backend.noiseModeIndex === 0
+                visible: backend.supportsAncLevels && backend.noiseModeIndex === 0
             }
 
             FormCard.FormComboBoxDelegate {
                 id: ancLevelCombo
-                visible: backend.noiseModeIndex === 0
+                comboBoxDelegate: Delegates.RoundedItemDelegate {
+                    implicitWidth: ListView.view ? ListView.view.width : Kirigami.Units.gridUnit * 16
+                    text: backend.ancLevelModel[index] ? backend.ancLevelModel[index].text : ""
+                    highlighted: backend.ancLevelIndex === index
+                }
+                visible: backend.supportsAncLevels && backend.noiseModeIndex === 0
                 text: root.i18n.anc_level_title
                 description: root.i18n.anc_level_desc
                 model: backend.ancLevelModel
@@ -390,12 +448,17 @@ Kirigami.ApplicationWindow {
             }
 
             FormCard.FormDelegateSeparator {
-                visible: backend.noiseModeIndex === 2
+                visible: backend.supportsTransEffects && backend.noiseModeIndex === 2
             }
 
             FormCard.FormComboBoxDelegate {
                 id: transEffectCombo
-                visible: backend.noiseModeIndex === 2
+                comboBoxDelegate: Delegates.RoundedItemDelegate {
+                    implicitWidth: ListView.view ? ListView.view.width : Kirigami.Units.gridUnit * 16
+                    text: backend.transEffectModel[index] ? backend.transEffectModel[index].text : ""
+                    highlighted: backend.transEffectIndex === index
+                }
+                visible: backend.supportsTransEffects && backend.noiseModeIndex === 2
                 text: root.i18n.trans_effect_title
                 description: root.i18n.trans_effect_desc
                 model: backend.transEffectModel
@@ -419,6 +482,7 @@ Kirigami.ApplicationWindow {
         // ---- Sound & Controls Section ----
         FormCard.FormHeader {
             maximumWidth: root.cardMaxW
+            visible: backend.connected && (backend.supportsEq || backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
             title: root.i18n.section_sound
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing + 2
@@ -426,10 +490,17 @@ Kirigami.ApplicationWindow {
 
         FormCard.FormCard {
             maximumWidth: root.cardMaxW
+            visible: backend.connected && (backend.supportsEq || backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
             enabled: backend.connected
 
             FormCard.FormComboBoxDelegate {
                 id: eqCombo
+                comboBoxDelegate: Delegates.RoundedItemDelegate {
+                    implicitWidth: ListView.view ? ListView.view.width : Kirigami.Units.gridUnit * 16
+                    text: backend.eqModel[index] ? backend.eqModel[index].text : ""
+                    highlighted: backend.eqIndex === index
+                }
+                visible: backend.supportsEq
                 text: root.i18n.eq_title
                 description: root.i18n.eq_desc
                 model: backend.eqModel
@@ -449,10 +520,20 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-            FormCard.FormDelegateSeparator { above: eqCombo; below: cycleCombo }
+            FormCard.FormDelegateSeparator {
+                visible: backend.supportsEq && (backend.supportsNoiseCycle || backend.supportsGameMode || backend.supportsWearDetection)
+                above: eqCombo
+                below: backend.supportsNoiseCycle ? cycleCombo : (backend.supportsGameMode ? gameSwitch : wearSwitch)
+            }
 
             FormCard.FormComboBoxDelegate {
                 id: cycleCombo
+                comboBoxDelegate: Delegates.RoundedItemDelegate {
+                    implicitWidth: ListView.view ? ListView.view.width : Kirigami.Units.gridUnit * 16
+                    text: backend.cycleModel[index] ? backend.cycleModel[index].text : ""
+                    highlighted: backend.cycleIndex === index
+                }
+                visible: backend.supportsNoiseCycle
                 text: root.i18n.cycle_title
                 description: root.i18n.cycle_desc
                 model: backend.cycleModel
@@ -472,20 +553,30 @@ Kirigami.ApplicationWindow {
                 }
             }
 
-            FormCard.FormDelegateSeparator { above: cycleCombo; below: gameSwitch }
+            FormCard.FormDelegateSeparator {
+                visible: backend.supportsNoiseCycle && (backend.supportsGameMode || backend.supportsWearDetection)
+                above: cycleCombo
+                below: backend.supportsGameMode ? gameSwitch : wearSwitch
+            }
 
             FormCard.FormSwitchDelegate {
                 id: gameSwitch
+                visible: backend.supportsGameMode
                 text: root.i18n.game_title
                 description: root.i18n.game_desc
                 checked: backend.gameMode
                 onToggled: backend.setGameMode(checked)
             }
 
-            FormCard.FormDelegateSeparator { above: gameSwitch; below: wearSwitch }
+            FormCard.FormDelegateSeparator {
+                visible: backend.supportsGameMode && backend.supportsWearDetection
+                above: gameSwitch
+                below: wearSwitch
+            }
 
             FormCard.FormSwitchDelegate {
                 id: wearSwitch
+                visible: backend.supportsWearDetection
                 text: root.i18n.wear_detect_title
                 description: root.i18n.wear_detect_desc
                 checked: backend.wearDetection
@@ -495,6 +586,7 @@ Kirigami.ApplicationWindow {
 
         // ---- Saved Earbuds Section (Multi-Device Management) ----
         FormCard.FormHeader {
+            visible: backend.connected
             maximumWidth: root.cardMaxW
             title: root.i18n.section_devices
             topPadding: Kirigami.Units.largeSpacing
@@ -502,6 +594,7 @@ Kirigami.ApplicationWindow {
         }
 
         FormCard.FormCard {
+            visible: backend.connected
             maximumWidth: root.cardMaxW
 
             Repeater {
@@ -589,12 +682,12 @@ Kirigami.ApplicationWindow {
             title: root.i18n.section_multipoint
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing + 2
-            visible: backend.connected && backend.multipointDevices.length > 0
+            visible: backend.supportsMultipoint && backend.connected && backend.multipointDevices.length > 0
         }
 
         FormCard.FormCard {
             maximumWidth: root.cardMaxW
-            visible: backend.connected && backend.multipointDevices.length > 0
+            visible: backend.supportsMultipoint && backend.connected && backend.multipointDevices.length > 0
 
             Repeater {
                 model: backend.multipointDevices
@@ -633,6 +726,7 @@ Kirigami.ApplicationWindow {
         // ---- Find My Earbuds Section ----
         FormCard.FormHeader {
             maximumWidth: root.cardMaxW
+            visible: backend.connected && backend.supportsFindDevice
             title: root.i18n.section_find
             topPadding: Kirigami.Units.largeSpacing
             bottomPadding: Kirigami.Units.largeSpacing + 2
@@ -640,7 +734,7 @@ Kirigami.ApplicationWindow {
 
         FormCard.FormCard {
             maximumWidth: root.cardMaxW
-            Layout.bottomMargin: Kirigami.Units.largeSpacing
+            visible: backend.connected && backend.supportsFindDevice
             enabled: backend.connected
 
             FormCard.FormButtonDelegate {
@@ -655,6 +749,17 @@ Kirigami.ApplicationWindow {
                     }
                 }
             }
+        }
+
+        // ---- Subtle Version Footer ----
+        Controls.Label {
+            Layout.fillWidth: true
+            Layout.topMargin: Kirigami.Units.largeSpacing
+            Layout.bottomMargin: Kirigami.Units.largeSpacing
+            horizontalAlignment: Text.AlignHCenter
+            text: backend.appVersion
+            font.pointSize: Kirigami.Theme.smallFont.pointSize
+            opacity: 0.48
         }
     }
 

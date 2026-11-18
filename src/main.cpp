@@ -18,19 +18,32 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QSet>
-#include <QSocketNotifier>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 
 #include <csignal>
+#include <cstdio>
 #include <iostream>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <QSocketNotifier>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace {
 
+#ifndef _WIN32
 int g_sigPair[2] = {-1, -1};
 
 void handleUnixSignal(int) {
@@ -40,8 +53,16 @@ void handleUnixSignal(int) {
         (void)unused;
     }
 }
+#endif
 
 void notifyDesktop(const QString& title, const QString& body) {
+#ifdef _WIN32
+    kalm::ipcRequest(
+        QJsonObject{{QStringLiteral("cmd"), QStringLiteral("notify")},
+                    {QStringLiteral("title"), title},
+                    {QStringLiteral("body"), body}},
+        500);
+#else
     const QString exe = QStandardPaths::findExecutable(QStringLiteral("notify-send"));
     if (exe.isEmpty()) return;
     QProcess::startDetached(exe, {
@@ -54,6 +75,7 @@ void notifyDesktop(const QString& title, const QString& body) {
                                      title,
                                      body,
                                  });
+#endif
 }
 
 QString formatBattCli(const QJsonValue& levelVal, bool charging, bool stale) {
@@ -83,14 +105,18 @@ void printStatusHuman(const QJsonObject& data) {
     const QString mac = data.value(QStringLiteral("device_mac")).toString();
     const QString fw = data.value(QStringLiteral("firmware")).toString(QStringLiteral("—"));
 
+    const QString protoStr = data.value(QStringLiteral("protocol")).toString(QStringLiteral("vivo_gaia"));
+    const bool hasSubModes = (protoStr == u"vivo_gaia" || protoStr == u"huawei_spp");
     QString mode = QStringLiteral("—");
     if (auto nm = kalm::parseNoiseModeStr(data.value(QStringLiteral("noise_mode")).toString())) {
         mode = kalm::noiseModeLabel(*nm);
-        if (*nm == kalm::NoiseMode::Anc && !data.value(QStringLiteral("anc_level")).isNull()) {
-            const QString sub = kalm::ancLevelLabel(data.value(QStringLiteral("anc_level")).toInt());
+        if (hasSubModes && *nm == kalm::NoiseMode::Anc && !data.value(QStringLiteral("anc_level")).isNull()) {
+            QString sub = data.value(QStringLiteral("anc_level_label")).toString();
+            if (sub.isEmpty()) sub = kalm::ancLevelLabel(data.value(QStringLiteral("anc_level")).toInt());
             if (!sub.isEmpty()) mode += QStringLiteral(" (%1)").arg(sub);
-        } else if (*nm == kalm::NoiseMode::Transparency && !data.value(QStringLiteral("transparency_effect")).isNull()) {
-            const QString sub = kalm::transparencyLabel(data.value(QStringLiteral("transparency_effect")).toInt());
+        } else if (hasSubModes && *nm == kalm::NoiseMode::Transparency && !data.value(QStringLiteral("transparency_effect")).isNull()) {
+            QString sub = data.value(QStringLiteral("transparency_effect_label")).toString();
+            if (sub.isEmpty()) sub = kalm::transparencyLabel(data.value(QStringLiteral("transparency_effect")).toInt());
             if (!sub.isEmpty()) mode += QStringLiteral(" (%1)").arg(sub);
         }
     }
@@ -123,7 +149,8 @@ void printStatusHuman(const QJsonObject& data) {
         << wearCliLabel(wear.value(QStringLiteral("right")).toString()) << "\n";
 
     if (!data.value(QStringLiteral("audio_effect")).isNull()) {
-        const QString eq = kalm::audioEffectLabel(data.value(QStringLiteral("audio_effect")).toInt());
+        QString eq = data.value(QStringLiteral("audio_effect_label")).toString();
+        if (eq.isEmpty()) eq = kalm::audioEffectLabel(data.value(QStringLiteral("audio_effect")).toInt());
         if (!eq.isEmpty()) out << padLabel(kalm::trKey("cli_sound")) << " " << eq << "\n";
     }
 
@@ -174,6 +201,19 @@ QString battSummaryShort(const QJsonObject& data) {
     return parts.join(QStringLiteral(" · "));
 }
 
+bool isHuaweiCliTarget(kalm::DeviceRegistry& reg, const QString& query) {
+    if (!query.trimmed().isEmpty()) {
+        if (auto resolved = reg.resolveQuery(query)) {
+            return kalm::huawei::matchesName(resolved->name);
+        }
+        return false;
+    }
+    if (auto active = reg.getActive()) {
+        return kalm::huawei::matchesName(active->name);
+    }
+    return false;
+}
+
 std::optional<int> parseEqPreset(const QString& raw) {
     const QString k = raw.trimmed().toLower();
     if (k == u"0" || k == u"standard" || k == u"стандартный") return 0x00;
@@ -214,13 +254,21 @@ int launchGui(const QString& targetDevice, bool startMinimized, const QString& l
     }
 
     if (qEnvironmentVariableIsEmpty("QT_QUICK_CONTROLS_STYLE")) {
+#ifdef _WIN32
+        qputenv("QT_QUICK_CONTROLS_STYLE", "FluentWinUI3");
+#else
         qputenv("QT_QUICK_CONTROLS_STYLE", "org.kde.desktop");
+#endif
     }
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("Kalm"));
     app.setApplicationDisplayName(QStringLiteral("Kalm"));
-    app.setApplicationVersion(QStringLiteral("0.4.0"));
+#ifdef KALM_DISPLAY_VERSION
+    app.setApplicationVersion(QStringLiteral(KALM_DISPLAY_VERSION));
+#else
+    app.setApplicationVersion(QStringLiteral("0.5.0"));
+#endif
     app.setDesktopFileName(QStringLiteral("io.github.kalm"));
     app.setQuitOnLastWindowClosed(false);
     app.setWindowIcon(kalm::makeKalmIcon(false, std::nullopt));
@@ -255,15 +303,25 @@ int launchGui(const QString& targetDevice, bool startMinimized, const QString& l
     backendPtr = &backend;
 
     kalm::KalmTrayController tray(session, backend);
-    kalm::IpcServer ipc(session, [&](const QString& token) { backend.pushShowFromWorker(token); });
+    kalm::IpcServer ipc(
+        session,
+        [&](const QString& token) { backend.pushShowFromWorker(token); },
+        [&](const QString& title, const QString& body) { tray.showToast(title, body); });
     ipc.start();
     session.start();
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("backend"), &backend);
-    engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
+#ifdef _WIN32
+    engine.load(QUrl(QStringLiteral("qrc:/qml/MainWin.qml")));
+#else
+    const QUrl qmlUrl = !qEnvironmentVariableIsEmpty("KALM_WIN_UI")
+                            ? QUrl(QStringLiteral("qrc:/qml/MainWin.qml"))
+                            : QUrl(QStringLiteral("qrc:/qml/Main.qml"));
+    engine.load(qmlUrl);
+#endif
     if (engine.rootObjects().isEmpty()) {
-        std::cerr << "Failed to load Kirigami QML interface.\n";
+        std::cerr << "Failed to load QML interface.\n";
         ipc.stop();
         session.stop();
         return 1;
@@ -280,6 +338,7 @@ int launchGui(const QString& targetDevice, bool startMinimized, const QString& l
     QObject::connect(&btTimer, &QTimer::timeout, &backend, &kalm::KalmBackend::refreshSavedDevicesAsync);
     btTimer.start();
 
+#ifndef _WIN32
     kalm::UniqueFd sigWriteFd;
     kalm::UniqueFd sigReadFd;
     std::unique_ptr<QSocketNotifier> sigNotifier;
@@ -297,13 +356,16 @@ int launchGui(const QString& targetDevice, bool startMinimized, const QString& l
         std::signal(SIGINT, handleUnixSignal);
         std::signal(SIGTERM, handleUnixSignal);
     }
+#endif
 
     const int rc = app.exec();
+#ifndef _WIN32
     std::signal(SIGINT, SIG_DFL);
     std::signal(SIGTERM, SIG_DFL);
     g_sigPair[0] = -1;
     g_sigPair[1] = -1;
     sigNotifier.reset();
+#endif
 
     backendPtr = nullptr;
     tray.hide();
@@ -351,7 +413,9 @@ int handleDevicesSubcmd(const QStringList& rest) {
         for (const auto& s : reg.devices()) saved.insert(s.mac);
         out << kalm::trKey("cli_bt_header") << "\n";
         for (const auto& b : found) {
-            const QString tag = b.isVivoTws() ? QStringLiteral("vivo/iQOO GAIA") : QStringLiteral("Bluetooth Audio");
+            const QString tag = b.isHuaweiTws() ? QStringLiteral("HUAWEI FreeBuds")
+                              : (b.isVivoTws() ? QStringLiteral("vivo/iQOO GAIA")
+                              : (b.isRealmeOppoTws() ? QStringLiteral("realme/OPPO") : QStringLiteral("Bluetooth Audio")));
             const QString conn = b.connected ? kalm::trKey("status_connected") : kalm::trKey("status_disconnected");
             const QString sv = saved.contains(b.mac) ? QStringLiteral(" [%1]").arg(kalm::trKey("status_in_list")) : QString{};
             out << "  • " << b.name << " — " << b.mac << " (" << tag << ", " << conn << ")" << sv << "\n";
@@ -415,6 +479,17 @@ int handleDevicesSubcmd(const QStringList& rest) {
 }  // namespace
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    if (argc > 1) {
+        if (::AttachConsole(ATTACH_PARENT_PROCESS)) {
+            FILE* fpOut = nullptr;
+            FILE* fpErr = nullptr;
+            freopen_s(&fpOut, "CONOUT$", "w", stdout);
+            freopen_s(&fpErr, "CONOUT$", "w", stderr);
+        }
+        ::SetConsoleOutputCP(CP_UTF8);
+    }
+#endif
     QStringList rawArgs;
     for (int i = 1; i < argc; ++i) rawArgs.append(QString::fromLocal8Bit(argv[i]));
 
@@ -462,7 +537,11 @@ int main(int argc, char** argv) {
     }
 
     if (wantVersion) {
-        std::cout << "kalm 0.4.0\n";
+#ifdef KALM_DISPLAY_VERSION
+        std::cout << "kalm " << KALM_DISPLAY_VERSION << "\n";
+#else
+        std::cout << "kalm 0.5.0\n";
+#endif
         return 0;
     }
 
@@ -655,14 +734,32 @@ int main(int argc, char** argv) {
                         .arg(positional[1])
                         .toStdString());
             }
+
+            // vivo GAIA and HUAWEI SPP use different preset ids for the same
+            // sound profile; translate the CLI slug for HUAWEI devices.
+            int targetCode = *eff;
+            const char* labelKey = nullptr;
+            if (isHuaweiCliTarget(reg, deviceQuery)) {
+                switch (*eff) {
+                    case 0: targetCode = 1; labelKey = "eq_standard"; break;
+                    case 1: targetCode = 9; labelKey = "eq_vocal"; break;
+                    case 2: targetCode = 2; labelKey = "eq_bass"; break;
+                    case 3: targetCode = 3; labelKey = "eq_treble"; break;
+                    default:
+                        throw std::runtime_error(
+                            "This sound preset is not available on HUAWEI earbuds.");
+                }
+            }
+
             const auto ipc = deviceQuery.isEmpty()
                                  ? kalm::ipcRequest(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("set_eq")},
-                                                                {QStringLiteral("effect"), *eff}})
+                                                                {QStringLiteral("effect"), targetCode}})
                                  : std::nullopt;
             if (!ipc || !ipc->value(QStringLiteral("ok")).toBool()) {
-                kalm::oneshotSetEq(reg, *eff, deviceQuery);
+                kalm::oneshotSetEq(reg, targetCode, deviceQuery);
             }
-            out << kalm::trKey("cli_sound") << " " << kalm::audioEffectLabel(*eff) << "\n";
+            out << kalm::trKey("cli_sound") << " "
+                << (labelKey ? kalm::trKey(labelKey) : kalm::audioEffectLabel(*eff)) << "\n";
             return 0;
         }
 

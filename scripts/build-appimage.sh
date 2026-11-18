@@ -181,6 +181,9 @@ import os, re, shutil, subprocess, sys
 appdir = sys.argv[1]
 lib_dir = os.path.join(appdir, "usr", "lib")
 
+# NOTE: libselinux is deliberately not excluded below. libgio (pulled in
+# through the Qt/KF6 stack) links against it, and distributions such as Arch
+# Linux do not ship libselinux at all, so the AppImage has to bundle it.
 EXCLUDE_PREFIXES = (
     "linux-vdso.so", "ld-linux", "libc.so", "libm.so", "libdl.so", "librt.so",
     "libpthread.so", "libresolv.so", "libutil.so", "libnsl.so", "libcrypt.so",
@@ -191,7 +194,7 @@ EXCLUDE_PREFIXES = (
     "libX11.so", "libX11-xcb.so", "libxcb.so", "libXau.so", "libXdmcp.so",
     "libXext.so", "libXfixes.so", "libXrender.so", "libXcursor.so",
     "libdbus-1.so", "libfontconfig.so", "libfreetype.so", "libharfbuzz.so",
-    "libz.so", "libexpat.so", "libsystemd.so", "libudev.so", "libselinux.so",
+    "libz.so", "libexpat.so", "libsystemd.so", "libudev.so",
     "libmount.so", "libblkid.so",
 )
 

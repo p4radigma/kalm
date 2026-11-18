@@ -3,7 +3,7 @@ name: Build Universal (Linux & Windows)
 on:
   push:
     branches: [universal]
-    tags: ["v*-universal*"]
+    tags: ["v*"]
   pull_request:
     branches: [universal]
   workflow_dispatch:
@@ -73,9 +73,12 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build Kalm (Release)
         run: |
+          git config --global --add safe.directory '*'
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j$(nproc)
 
@@ -108,6 +111,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure MSVC x64 developer environment
         uses: ilammy/msvc-dev-cmd@v1

@@ -20,6 +20,7 @@
 #include <QJsonObject>
 #include <QMap>
 #include <QProcess>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QTimer>
 
@@ -101,9 +102,11 @@ void saveCachedChannel(const QString& mac, int channel) {
         }
     }
     obj.insert(mac.toUpper(), channel);
-    QFile out(path);
+    QSaveFile out(path);
     if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        out.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
         out.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+        out.commit();
     }
 }
 
@@ -308,10 +311,11 @@ SocketHandle openLocalIpcServer(const QString& path) {
 
     UniqueSocket fd(::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
     if (!fd) return kInvalidSocket;
+    (void)::fchmod(fd.get(), 0600);
     if (::bind(fd.get(), reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) < 0) {
         return kInvalidSocket;
     }
-    ::chmod(pathUtf8.constData(), 0600);
+    (void)::chmod(pathUtf8.constData(), 0600);
     if (::listen(fd.get(), 8) < 0) {
         return kInvalidSocket;
     }
@@ -322,12 +326,21 @@ SocketHandle acceptLocalIpcClient(SocketHandle serverSock) {
     if (serverSock < 0) return kInvalidSocket;
     for (;;) {
         const int c = ::accept4(serverSock, nullptr, nullptr, SOCK_CLOEXEC);
-        if (c < 0 && errno == EINTR) continue;
-        return (c >= 0) ? c : kInvalidSocket;
+        if (c < 0) {
+            if (errno == EINTR) continue;
+            return kInvalidSocket;
+        }
+        ucred cred{};
+        socklen_t len = sizeof(cred);
+        if (::getsockopt(c, SOL_SOCKET, SO_PEERCRED, &cred, &len) < 0 || cred.uid != ::getuid()) {
+            ::close(c);
+            continue;
+        }
+        return c;
     }
 }
 
-QList<BluezDevice> listBluezDevices(bool onlyVivo, bool onlyAudio) {
+QList<BluezDevice> listBluezDevices(bool onlySupported, bool onlyAudio) {
     QList<BluezDevice> result;
     QDBusConnection bus = QDBusConnection::systemBus();
     if (!bus.isConnected()) return result;
@@ -389,7 +402,7 @@ QList<BluezDevice> listBluezDevices(bool onlyVivo, bool onlyAudio) {
             item.batteryPct = battProps.value(QStringLiteral("Percentage")).toInt();
         }
 
-        if (onlyVivo && !item.isSupportedTws()) continue;
+        if (onlySupported && !item.isSupportedTws()) continue;
         if (onlyAudio && !item.isAudioDevice()) continue;
         result.append(std::move(item));
     }

@@ -141,6 +141,11 @@ int main() {
     KALM_CHECK(ancLevelLabel(2) == u"Сильное");
     KALM_CHECK(transparencyLabel(2) == u"Усиление голоса");
 
+    // Path-traversal / malformed language codes must safely fall back to English
+    initI18n(QStringLiteral("../../etc/passwd"));
+    KALM_CHECK(currentLanguage() == u"en");
+    initI18n(QStringLiteral("ru"));
+
     // 4. Registry tests
     QTemporaryDir tmp;
     KALM_CHECK(tmp.isValid());
@@ -259,6 +264,19 @@ int main() {
         const auto rmCaps = rmSess.capabilities();
         KALM_CHECK(rmCaps.protocol == DeviceProtocol::RealmeOppoTl);
         KALM_CHECK(!rmCaps.ancLevels && !rmCaps.equalizer && !rmCaps.gameMode && !rmCaps.findDevice && rmCaps.probe);
+
+        // Adversarial stream fuzzing & bounded buffer resync across all 3 decoders
+        FrameDecoder advVivo;
+        RealmeOppoDecoder advRealme;
+        hw::Decoder advHw;
+        const QByteArray poison(200000, '\x5a');
+        (void)advVivo.feed(QByteArray::fromHex("ff0402ffff001b8230") + poison);
+        (void)advRealme.feed(QByteArray::fromHex("aaff7f00000681") + poison);
+        (void)advHw.feed(QByteArray::fromHex("5a1ffb002b2a01ff") + poison);
+
+        KALM_CHECK(advVivo.feed(buildHandshake()).size() == 1);
+        KALM_CHECK(advRealme.feed(buildRealmeOppoPacket(kTlCmdGetBattery, 1, {})).size() == 1);
+        KALM_CHECK(advHw.feed(hw::buildQueryAnc()).size() == 1);
     }
 
     // 5. Heap & Handle/FD Leak Stress Test (10,000 decode/JSON cycles + 1,000 IPC roundtrips)
@@ -287,8 +305,29 @@ int main() {
         (void)ipcRequest(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("status")}}, 1000);
     }
 
+    // Concurrent i18n + IPC thread-safety stress check
+    {
+        std::thread writer([&]() {
+            for (int i = 0; i < 200; ++i) {
+                initI18n((i % 2 == 0) ? QStringLiteral("en") : QStringLiteral("ru"));
+            }
+        });
+        std::thread reader([&]() {
+            for (int i = 0; i < 400; ++i) {
+                const QString lbl = ancLevelLabel(2);
+                KALM_CHECK(!lbl.isEmpty());
+                const QVariantMap m = i18nVariantMap();
+                KALM_CHECK(!m.isEmpty());
+                const auto resp = ipcRequest(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("status")}}, 1000);
+                KALM_CHECK(resp.has_value());
+            }
+        });
+        writer.join();
+        reader.join();
+    }
+
     const long fdsBefore = countOpenHandles();
-#ifdef __GLIBC__
+#if defined(__GLIBC__) && !defined(__SANITIZE_ADDRESS__)
     const size_t h0 = mallinfo2().uordblks;
 #endif
 
@@ -302,14 +341,14 @@ int main() {
         const auto json = loopSt.toJson();
         KALM_CHECK(json.value(QStringLiteral("connected")).toBool());
     }
-#ifdef __GLIBC__
+#if defined(__GLIBC__) && !defined(__SANITIZE_ADDRESS__)
     const size_t h1 = mallinfo2().uordblks;
 #endif
 
     for (int iter = 0; iter < 1000; ++iter) {
         initI18n((iter % 2 == 0) ? QStringLiteral("en") : QStringLiteral("ru"));
     }
-#ifdef __GLIBC__
+#if defined(__GLIBC__) && !defined(__SANITIZE_ADDRESS__)
     const size_t h2 = mallinfo2().uordblks;
 #endif
 
@@ -319,7 +358,7 @@ int main() {
         const auto stResp = ipcRequest(QJsonObject{{QStringLiteral("cmd"), QStringLiteral("status")}}, 1000);
         KALM_CHECK(stResp.has_value() && stResp->value(QStringLiteral("ok")).toBool());
     }
-#ifdef __GLIBC__
+#if defined(__GLIBC__) && !defined(__SANITIZE_ADDRESS__)
     const size_t h3 = mallinfo2().uordblks;
 #endif
     const long fdsDuring = countOpenHandles();
@@ -327,7 +366,7 @@ int main() {
     srv.stop();
     const long fdsAfterStop = countOpenHandles();
 
-#ifdef __GLIBC__
+#if defined(__GLIBC__) && !defined(__SANITIZE_ADDRESS__)
     const ssize_t dDecode = static_cast<ssize_t>(h1) - static_cast<ssize_t>(h0);
     const ssize_t dI18n = static_cast<ssize_t>(h2) - static_cast<ssize_t>(h1);
     const ssize_t dIpc = static_cast<ssize_t>(h3) - static_cast<ssize_t>(h2);
@@ -339,9 +378,8 @@ int main() {
     KALM_CHECK(dI18n <= 65536);
     KALM_CHECK(dIpc <= 65536);
 #else
-    std::cout << "Handle check: before=" << fdsBefore << " during=" << fdsDuring
+    std::cout << "Handle/FD check: before=" << fdsBefore << " during=" << fdsDuring
               << " afterStop=" << fdsAfterStop << "\n";
-    // Allow tiny OS background thread pool variance on Windows, ensure no 1000-socket handle leak!
     KALM_CHECK(fdsDuring - fdsBefore < 20);
 #endif
 

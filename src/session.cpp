@@ -24,6 +24,7 @@
 #include <QDBusConnectionInterface>
 #include <QDBusMessage>
 #include <QDBusVariant>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -37,12 +38,38 @@ QString ipcSocketPath() {
     QDir().mkpath(dir);
     return dir + QStringLiteral("/kalm.sock");
 #else
-    QString runtimeDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
-    if (runtimeDir.isEmpty()) {
-        runtimeDir = QStringLiteral("/tmp/kalm-%1").arg(::getuid());
+    auto ensureOwnedSecureDir = [](const QString& dirPath) -> bool {
+        const QByteArray raw = dirPath.toUtf8();
+        ::mkdir(raw.constData(), 0700);
+        struct stat st {};
+        if (::lstat(raw.constData(), &st) != 0) return false;
+        if (S_ISLNK(st.st_mode) || !S_ISDIR(st.st_mode) || st.st_uid != ::getuid()) {
+            return false;
+        }
+        (void)::chmod(raw.constData(), 0700);
+        return true;
+    };
+
+    const QString xdgRuntime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    if (!xdgRuntime.isEmpty()) {
+        struct stat xdgSt {};
+        const QByteArray xdgRaw = xdgRuntime.toUtf8();
+        if (::lstat(xdgRaw.constData(), &xdgSt) == 0 &&
+            !S_ISLNK(xdgSt.st_mode) && S_ISDIR(xdgSt.st_mode) && xdgSt.st_uid == ::getuid()) {
+            return xdgRuntime + QStringLiteral("/kalm.sock");
+        }
     }
-    QDir().mkpath(runtimeDir);
-    return runtimeDir + QStringLiteral("/kalm.sock");
+
+    const QString fallbackDir = QStringLiteral("/tmp/kalm-%1").arg(::getuid());
+    if (ensureOwnedSecureDir(fallbackDir)) {
+        return fallbackDir + QStringLiteral("/kalm.sock");
+    }
+
+    QString cacheBase = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
+    if (cacheBase.isEmpty()) cacheBase = QDir::homePath() + QStringLiteral("/.cache");
+    const QString cacheDir = cacheBase + QStringLiteral("/kalm-ipc");
+    ensureOwnedSecureDir(cacheDir);
+    return cacheDir + QStringLiteral("/kalm.sock");
 #endif
 }
 
@@ -58,11 +85,12 @@ std::optional<QJsonObject> ipcRequest(const QJsonObject& payload, int timeoutMs)
         return std::nullopt;
     }
 
+    constexpr qsizetype kMaxIpcRespBytes = 512 * 1024;
     QByteArray respBytes;
     QElapsedTimer timer;
     timer.start();
     char buf[4096];
-    while (timer.elapsed() < timeoutMs) {
+    while (timer.elapsed() < timeoutMs && respBytes.size() < kMaxIpcRespBytes) {
         const int rem = std::max(50, static_cast<int>(timeoutMs - timer.elapsed()));
         const int pr = pollSocketRead(fd.get(), rem);
         if (pr <= 0) break;
@@ -359,8 +387,27 @@ void KalmSession::closeSocket(bool resetIdentity) {
         }
     }
     if (fd != kInvalidSocket) {
+        // Shutdown wakes poll/recv on runLoop immediately without freeing the
+        // descriptor number prematurely; runLoop's UniqueSocket closes it safely.
         shutdownSocketHandle(fd);
-        closeSocketHandle(fd);
+    }
+    {
+        QMutexLocker wlock(&m_waitersMtx);
+        for (const auto& w : m_waiters) {
+            QMutexLocker l(&w->mtx);
+            w->aborted = true;
+            w->cv.wakeAll();
+        }
+        for (const auto& w : m_realmeWaiters) {
+            QMutexLocker l(&w->mtx);
+            w->aborted = true;
+            w->cv.wakeAll();
+        }
+        for (const auto& w : m_hwWaiters) {
+            QMutexLocker l(&w->mtx);
+            w->aborted = true;
+            w->cv.wakeAll();
+        }
     }
     if (wasConnected || resetIdentity) {
         emitState();
@@ -404,7 +451,7 @@ std::optional<Frame> KalmSession::sendAndWait(const QByteArray& packet,
     std::optional<Frame> out;
     {
         QMutexLocker lock(&waiter->mtx);
-        if (!waiter->done) {
+        if (!waiter->done && !waiter->aborted) {
             waiter->cv.wait(&waiter->mtx, timeoutMs);
         }
         if (waiter->done) out = waiter->result;
@@ -437,7 +484,7 @@ std::optional<RealmeOppoFrame> KalmSession::sendAndWaitRealme(
     std::optional<RealmeOppoFrame> out;
     {
         QMutexLocker lock(&waiter->mtx);
-        if (!waiter->done) {
+        if (!waiter->done && !waiter->aborted) {
             waiter->cv.wait(&waiter->mtx, timeoutMs);
         }
         if (waiter->done) out = waiter->result;
@@ -476,7 +523,7 @@ std::optional<huawei::Packet> KalmSession::sendAndWaitHuawei(
     std::optional<huawei::Packet> out;
     {
         QMutexLocker lock(&waiter->mtx);
-        if (!waiter->done) {
+        if (!waiter->done && !waiter->aborted) {
             waiter->cv.wait(&waiter->mtx, timeoutMs);
         }
         if (waiter->done) out = waiter->result;
@@ -938,7 +985,8 @@ void KalmSession::runLoop() {
 
         const WireProfile profile = selectProfile(rawBtName);
         const DeviceProtocol proto = conn.protocol;
-        const SocketHandle rawConnFd = conn.fd.release();
+        UniqueSocket connSock = std::move(conn.fd);
+        const SocketHandle rawConnFd = connSock.get();
         {
             QMutexLocker lock(&m_lock);
             m_sockFd = rawConnFd;
@@ -1046,6 +1094,7 @@ void KalmSession::runLoop() {
         }
 
         closeSocket(false);
+        connSock.reset();
         emitDevices();
         if (!m_stop.load()) {
             sleepInterruptible(2000);
@@ -1229,8 +1278,9 @@ bool IpcServer::start() {
         QFile::remove(m_path);
     }
 
-    m_serverFd = openLocalIpcServer(m_path);
-    if (m_serverFd == kInvalidSocket) return false;
+    const SocketHandle srv = openLocalIpcServer(m_path);
+    if (srv == kInvalidSocket) return false;
+    m_serverFd.store(srv);
 
     m_stop.store(false);
     m_thread = std::thread(&IpcServer::acceptLoop, this);
@@ -1239,20 +1289,23 @@ bool IpcServer::start() {
 
 void IpcServer::stop() {
     m_stop.store(true);
-    if (m_serverFd != kInvalidSocket) {
-        shutdownSocketHandle(m_serverFd);
-        closeSocketHandle(m_serverFd);
-        m_serverFd = kInvalidSocket;
+    const SocketHandle srv = m_serverFd.load();
+    if (srv != kInvalidSocket) {
+        shutdownSocketHandle(srv);
     }
     if (m_thread.joinable()) {
         m_thread.join();
+    }
+    if (srv != kInvalidSocket) {
+        closeSocketHandle(srv);
+        m_serverFd.store(kInvalidSocket);
     }
     QFile::remove(m_path);
 }
 
 void IpcServer::acceptLoop() {
     while (!m_stop.load()) {
-        const SocketHandle srv = m_serverFd;
+        const SocketHandle srv = m_serverFd.load();
         if (srv == kInvalidSocket) break;
         const int pr = pollSocketRead(srv, 400);
         if (pr <= 0) {
@@ -1267,11 +1320,22 @@ void IpcServer::acceptLoop() {
 
 void IpcServer::handleClient(SocketHandle rawClientFd) {
     UniqueSocket clientFd(rawClientFd);
+    constexpr qsizetype kMaxIpcReqBytes = 16 * 1024;
     QByteArray raw;
+    QElapsedTimer timer;
+    timer.start();
     char buf[4096];
-    if (pollSocketRead(clientFd.get(), 2000) > 0) {
+    while (timer.elapsed() < 2000 && raw.size() < kMaxIpcReqBytes) {
+        const int rem = std::max(20, static_cast<int>(2000 - timer.elapsed()));
+        if (pollSocketRead(clientFd.get(), rem) <= 0) break;
         const qint64 n = recvSocket(clientFd.get(), buf, sizeof(buf));
-        if (n > 0) raw.append(buf, static_cast<qsizetype>(n));
+        if (n <= 0) break;
+        raw.append(buf, static_cast<qsizetype>(n));
+        QJsonParseError probeErr{};
+        const auto probeDoc = QJsonDocument::fromJson(raw, &probeErr);
+        if (probeErr.error == QJsonParseError::NoError && probeDoc.isObject()) {
+            break;
+        }
     }
 
     QJsonObject resp;

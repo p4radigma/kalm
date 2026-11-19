@@ -96,13 +96,21 @@ QByteArray encode(const QByteArray& command, const QList<QPair<int, QByteArray>>
 }
 
 QList<Packet> Decoder::feed(const QByteArray& chunk) {
-    m_buf.append(chunk);
+    if (!chunk.isEmpty()) m_buf.append(chunk);
+    if (m_buf.size() > 131072) {
+        m_buf.remove(0, m_buf.size() - 65536);
+    }
     QList<Packet> out;
 
     while (m_buf.size() >= 4) {
-        if (static_cast<uint8_t>(m_buf.at(0)) != kMagic) {
-            m_buf.remove(0, 1);
-            continue;
+        const qsizetype magicIdx = m_buf.indexOf(static_cast<char>(kMagic));
+        if (magicIdx < 0) {
+            m_buf.clear();
+            break;
+        }
+        if (magicIdx > 0) {
+            m_buf.remove(0, magicIdx);
+            if (m_buf.size() < 4) break;
         }
         const int length = (static_cast<uint8_t>(m_buf.at(1)) << 8) |
                            static_cast<uint8_t>(m_buf.at(2));
@@ -160,11 +168,6 @@ const ModelProfile& profileFor(const QString& deviceName) {
         return kDynamicProfile;
     }
     return genericProfile();
-}
-
-QString profileSignature(const QString& deviceName) {
-    if (!matchesName(deviceName)) return QStringLiteral("gaia");
-    return QStringLiteral("huawei:") + profileFor(deviceName).label;
 }
 
 const QList<PresetEntry>& ancLevels(const ModelProfile& profile) {
@@ -278,10 +281,6 @@ QByteArray buildSetAutoPause(bool enabled) {
 
 QByteArray buildQueryDualConnectEnabled() {
     return encode(QByteArray::fromHex("2b2f"), {{1, {}}});
-}
-
-QByteArray buildSetDualConnectEnabled(bool enabled) {
-    return encode(QByteArray::fromHex("2b2e"), {{1, byteValue(enabled ? 1 : 0)}});
 }
 
 QByteArray buildEnumerateDualConnect() {
@@ -456,14 +455,6 @@ PacketEffect applyPacket(const Packet& packet, EarbudState& state,
 int eqCurrentPreset(const Packet& packet) {
     if (!packet.has(2) || packet.param(2).size() != 1) return -1;
     return packet.paramByte(2, -1);
-}
-
-QList<int> eqAvailablePresets(const Packet& packet) {
-    QList<int> out;
-    for (const char ch : packet.param(3)) {
-        out.append(static_cast<uint8_t>(ch));
-    }
-    return out;
 }
 
 QString eqPresetLabel(int presetId) {

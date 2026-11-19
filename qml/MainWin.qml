@@ -159,7 +159,7 @@ ApplicationWindow {
 
             Button {
                 Layout.fillWidth: true
-                text: "Bluetooth Settings…"
+                text: root.i18n.action_kde_bt_settings
                 onClicked: {
                     drawer.close()
                     backend.openSystemBluetoothSettings()
@@ -167,6 +167,7 @@ ApplicationWindow {
             }
 
             Button {
+                visible: backend.supportsProbe
                 Layout.fillWidth: true
                 text: root.i18n.action_probe
                 onClicked: {
@@ -317,7 +318,6 @@ ApplicationWindow {
                         text: "🎧"
                         font.pixelSize: 28
                         Layout.alignment: Qt.AlignHCenter
-                        opacity: backend.connected ? 1.0 : 0.55
                     }
 
                     Label {
@@ -337,14 +337,6 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.WordWrap
                         Layout.fillWidth: true
-                    }
-
-                    Button {
-                        visible: !backend.connected && backend.deviceMac.length > 0
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.topMargin: 6
-                        text: root.i18n.action_connect_bt
-                        onClicked: backend.connectBluetoothDevice(backend.deviceMac)
                     }
                 }
             }
@@ -1066,7 +1058,7 @@ ApplicationWindow {
 
             Button {
                 Layout.fillWidth: true
-                text: "Open Bluetooth Settings…"
+                text: root.i18n.dlg_pair_kde
                 onClicked: backend.openSystemBluetoothSettings()
             }
         }

@@ -269,7 +269,7 @@ WireProfile selectProfile(const QString& deviceName) {
     WireProfile fallback{QStringLiteral("vivo TWS 4/5 Family (GAIA v4)"), 4, QByteArray("\x00", 1), QByteArray("\x03\x01", 2)};
     for (const QString& src : sources) {
         QFile f(src);
-        if (!f.exists() || !f.open(QIODevice::ReadOnly)) continue;
+        if (!f.exists() || f.size() > 1024 * 1024 || !f.open(QIODevice::ReadOnly)) continue;
         const auto doc = QJsonDocument::fromJson(f.readAll());
         if (!doc.isObject()) continue;
         const QJsonObject root = doc.object();
@@ -425,6 +425,9 @@ QByteArray encodeFrame(uint8_t version, uint16_t vendor, uint16_t command,
 
 QList<Frame> FrameDecoder::feed(const QByteArray& chunk) {
     if (!chunk.isEmpty()) m_buf.append(chunk);
+    if (m_buf.size() > 131072) {
+        m_buf.remove(0, m_buf.size() - kMaxFrameBytes);
+    }
     QList<Frame> frames;
     while (true) {
         const qsizetype idx = m_buf.indexOf(static_cast<char>(kPreamble));
@@ -823,6 +826,9 @@ QByteArray buildRealmeOppoPacket(uint16_t cmd, uint8_t seq, const QByteArray& pa
 
 QList<RealmeOppoFrame> RealmeOppoDecoder::feed(const QByteArray& chunk) {
     if (!chunk.isEmpty()) m_buf.append(chunk);
+    if (m_buf.size() > 131072) {
+        m_buf.remove(0, m_buf.size() - kMaxFrameBytes);
+    }
     QList<RealmeOppoFrame> frames;
     while (true) {
         const qsizetype idx = m_buf.indexOf(static_cast<char>(0xAA));

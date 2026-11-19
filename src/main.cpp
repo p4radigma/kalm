@@ -23,6 +23,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <csignal>
 #include <cstdio>
 #include <iostream>
@@ -56,26 +57,28 @@ void handleUnixSignal(int) {
 #endif
 
 void notifyDesktop(const QString& title, const QString& body) {
-#ifdef _WIN32
+#ifndef _WIN32
+    const QString exe = QStandardPaths::findExecutable(QStringLiteral("notify-send"));
+    if (!exe.isEmpty()) {
+        QProcess::startDetached(exe, {
+                                         QStringLiteral("-a"),
+                                         QStringLiteral("Kalm"),
+                                         QStringLiteral("-i"),
+                                         QStringLiteral("audio-headset"),
+                                         QStringLiteral("-h"),
+                                         QStringLiteral("string:x-canonical-private-synchronous:kalm"),
+                                         QStringLiteral("--"),
+                                         title,
+                                         body,
+                                     });
+        return;
+    }
+#endif
     kalm::ipcRequest(
         QJsonObject{{QStringLiteral("cmd"), QStringLiteral("notify")},
                     {QStringLiteral("title"), title},
                     {QStringLiteral("body"), body}},
         500);
-#else
-    const QString exe = QStandardPaths::findExecutable(QStringLiteral("notify-send"));
-    if (exe.isEmpty()) return;
-    QProcess::startDetached(exe, {
-                                     QStringLiteral("-a"),
-                                     QStringLiteral("Kalm"),
-                                     QStringLiteral("-i"),
-                                     QStringLiteral("audio-headset"),
-                                     QStringLiteral("-h"),
-                                     QStringLiteral("string:x-canonical-private-synchronous:kalm"),
-                                     title,
-                                     body,
-                                 });
-#endif
 }
 
 QString formatBattCli(const QJsonValue& levelVal, bool charging, bool stale) {
@@ -370,6 +373,7 @@ int launchGui(const QString& targetDevice, bool startMinimized, const QString& l
     backendPtr = nullptr;
     tray.hide();
     ipc.stop();
+    backend.waitForWorkers();
     session.stop();
     return rc;
 }
@@ -525,7 +529,7 @@ int main(int argc, char** argv) {
             outputFile = rawArgs[++i];
         } else if (a == u"--listen") {
             if (i + 1 < rawArgs.size() && !rawArgs[i + 1].startsWith(u'-')) {
-                listenSeconds = std::max(1, rawArgs[++i].toInt());
+                listenSeconds = std::clamp(rawArgs[++i].toInt(), 1, 120);
             } else {
                 listenSeconds = 15;
             }

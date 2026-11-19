@@ -33,10 +33,8 @@ class KalmBackend : public QObject {
 
     Q_PROPERTY(bool quitting READ quitting NOTIFY quittingChanged)
     Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
-    Q_PROPERTY(bool vivoFeatures READ vivoFeatures NOTIFY stateChanged)
     Q_PROPERTY(QString deviceName READ deviceName NOTIFY stateChanged)
     Q_PROPERTY(QString deviceMac READ deviceMac NOTIFY stateChanged)
-    Q_PROPERTY(QString firmware READ firmware NOTIFY stateChanged)
     Q_PROPERTY(QString statusSummary READ statusSummary NOTIFY stateChanged)
     Q_PROPERTY(int noiseModeIndex READ noiseModeIndex NOTIFY stateChanged)
 
@@ -70,7 +68,6 @@ class KalmBackend : public QObject {
     Q_PROPERTY(bool supportsMultipoint READ supportsMultipoint NOTIFY capabilitiesChanged)
     Q_PROPERTY(bool supportsFindDevice READ supportsFindDevice NOTIFY capabilitiesChanged)
     Q_PROPERTY(bool supportsProbe READ supportsProbe NOTIFY capabilitiesChanged)
-    Q_PROPERTY(QString protocolLabel READ protocolLabel NOTIFY capabilitiesChanged)
 
     Q_PROPERTY(QVariantList multipointDevices READ multipointDevices NOTIFY stateChanged)
     Q_PROPERTY(QVariantList savedDevices READ savedDevices NOTIFY devicesChanged)
@@ -79,7 +76,6 @@ class KalmBackend : public QObject {
 
     Q_PROPERTY(QString bannerText READ bannerText NOTIFY bannerChanged)
     Q_PROPERTY(int bannerType READ bannerType NOTIFY bannerChanged)
-    Q_PROPERTY(int bannerSeq READ bannerSeq NOTIFY bannerChanged)
     Q_PROPERTY(bool probeBusy READ probeBusy NOTIFY probeChanged)
     Q_PROPERTY(QString probeReport READ probeReport NOTIFY probeChanged)
 
@@ -88,6 +84,7 @@ public:
     ~KalmBackend() override;
 
     void bindWindow(QWindow* win);
+    void waitForWorkers();
 
     void pushStateFromWorker(const EarbudState& st);
     void pushDevicesRefreshFromWorker();
@@ -101,10 +98,8 @@ public:
 
     bool quitting() const { return m_quitting; }
     bool connected() const { return m_state.connected; }
-    bool vivoFeatures() const { return !m_state.connected || m_state.protocol == DeviceProtocol::VivoGaia; }
     QString deviceName() const;
     QString deviceMac() const { return m_state.deviceMac; }
-    QString firmware() const { return m_state.firmware; }
     QString statusSummary() const;
     int noiseModeIndex() const;
 
@@ -138,11 +133,9 @@ public:
     bool supportsMultipoint() const { return m_caps.multipoint; }
     bool supportsFindDevice() const { return m_caps.findDevice; }
     bool supportsProbe() const { return m_caps.probe; }
-    QString protocolLabel() const { return m_caps.profileLabel; }
 
     QString ancTextForCode(int code) const;
     QString transTextForCode(int code) const;
-    QString eqTextForCode(int code) const;
 
     QVariantList multipointDevices() const;
     QVariantList savedDevices() const { return m_savedList; }
@@ -151,7 +144,6 @@ public:
 
     QString bannerText() const { return m_bannerText; }
     int bannerType() const { return m_bannerType; }
-    int bannerSeq() const { return m_bannerSeq; }
     bool probeBusy() const { return m_probeBusy; }
     QString probeReport() const { return m_probeReport; }
 

@@ -68,9 +68,6 @@ struct ModelProfile {
 
 bool matchesName(const QString& deviceName);
 const ModelProfile& profileFor(const QString& deviceName);
-// Stable identifier of the selected profile (\<profile label\>), used by the
-// UI to rebuild protocol-dependent models only when needed.
-QString profileSignature(const QString& deviceName);
 
 const QList<PresetEntry>& ancLevels(const ModelProfile& profile);
 const QList<PresetEntry>& transparencyLevels(const ModelProfile& profile);
@@ -92,7 +89,6 @@ QByteArray buildSetLowLatency(bool enabled);
 QByteArray buildQueryAutoPause();
 QByteArray buildSetAutoPause(bool enabled);
 QByteArray buildQueryDualConnectEnabled();
-QByteArray buildSetDualConnectEnabled(bool enabled);
 QByteArray buildEnumerateDualConnect();
 QByteArray buildDualConnectAction(const QString& mac, bool connect);
 
@@ -110,9 +106,8 @@ struct PacketEffect {
 PacketEffect applyPacket(const Packet& packet, EarbudState& state,
                          const ModelProfile& profile);
 
-// Equalizer response helpers (used by the session to follow device presets).
+// Equalizer response helper (used by the session to follow device presets).
 int eqCurrentPreset(const Packet& packet);
-QList<int> eqAvailablePresets(const Packet& packet);
 
 // Localized name of a HUAWEI equalizer preset id.
 QString eqPresetLabel(int presetId);

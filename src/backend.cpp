@@ -113,6 +113,10 @@ KalmBackend::KalmBackend(KalmSession& session, DeviceRegistry& registry, QObject
 }
 
 KalmBackend::~KalmBackend() {
+    waitForWorkers();
+}
+
+void KalmBackend::waitForWorkers() {
     m_pool.clear();
     m_pool.waitForDone();
 }
@@ -240,8 +244,17 @@ void KalmBackend::pushShowFromWorker(const QString& activationToken) {
     QMetaObject::invokeMethod(
         this,
         [this, activationToken]() {
-            if (!activationToken.isEmpty()) {
-                qputenv("XDG_ACTIVATION_TOKEN", activationToken.toUtf8());
+            if (!activationToken.isEmpty() && activationToken.size() <= 512) {
+                bool safeToken = true;
+                for (QChar ch : activationToken) {
+                    if (ch < QChar(0x21) || ch > QChar(0x7E)) {
+                        safeToken = false;
+                        break;
+                    }
+                }
+                if (safeToken) {
+                    qputenv("XDG_ACTIVATION_TOKEN", activationToken.toLatin1());
+                }
             }
             Q_EMIT windowShowRequested();
         },
@@ -313,16 +326,6 @@ QString KalmBackend::ancTextForCode(int code) const {
 
 QString KalmBackend::transTextForCode(int code) const {
     for (const auto& v : m_transEffectModel) {
-        const QVariantMap m = v.toMap();
-        if (m.value(QStringLiteral("value")).toInt() == code) {
-            return m.value(QStringLiteral("text")).toString();
-        }
-    }
-    return {};
-}
-
-QString KalmBackend::eqTextForCode(int code) const {
-    for (const auto& v : m_eqModel) {
         const QVariantMap m = v.toMap();
         if (m.value(QStringLiteral("value")).toInt() == code) {
             return m.value(QStringLiteral("text")).toString();
@@ -520,7 +523,7 @@ void KalmBackend::scanBluetoothDevices() {
             out.append(QVariantMap{
                 {QStringLiteral("mac"), b.mac},
                 {QStringLiteral("name"), b.name},
-                {QStringLiteral("isVivo"), b.isSupportedTws()},
+                {QStringLiteral("isSupported"), b.isSupportedTws()},
                 {QStringLiteral("connected"), b.connected},
                 {QStringLiteral("alreadySaved"), already},
                 {QStringLiteral("subtitle"), parts.join(QStringLiteral(" · "))},
@@ -604,6 +607,8 @@ void KalmBackend::openSystemBluetoothSettings() {
         {QStringLiteral("systemsettings"), QStringLiteral("kcm_bluetooth")},
         {QStringLiteral("kcmshell6"), QStringLiteral("kcm_bluetooth")},
         {QStringLiteral("bluedevil-wizard")},
+        {QStringLiteral("gnome-control-center"), QStringLiteral("bluetooth")},
+        {QStringLiteral("blueman-manager")},
     };
     for (const QStringList& cmd : cmds) {
         if (!QStandardPaths::findExecutable(cmd.first()).isEmpty()) {

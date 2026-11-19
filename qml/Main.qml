@@ -255,7 +255,6 @@ Kirigami.ApplicationWindow {
                     Layout.alignment: Qt.AlignHCenter
                     implicitWidth: Kirigami.Units.iconSizes.medium
                     implicitHeight: Kirigami.Units.iconSizes.medium
-                    opacity: backend.connected ? 1.0 : 0.55
                 }
 
                 Kirigami.Heading {
@@ -273,15 +272,6 @@ Kirigami.ApplicationWindow {
                     wrapMode: Text.WordWrap
                     opacity: 0.75
                     Layout.fillWidth: true
-                }
-
-                Controls.Button {
-                    visible: !backend.connected && backend.deviceMac.length > 0
-                    Layout.alignment: Qt.AlignHCenter
-                    Layout.topMargin: Kirigami.Units.smallSpacing
-                    text: root.i18n.action_connect_bt
-                    icon.name: "network-bluetooth-activated-symbolic"
-                    onClicked: backend.connectBluetoothDevice(backend.deviceMac)
                 }
             }
         }
@@ -830,7 +820,7 @@ Kirigami.ApplicationWindow {
                             leadingPadding: Kirigami.Units.largeSpacing + Kirigami.Units.smallSpacing
 
                             leading: Kirigami.Icon {
-                                source: modelData.isVivo ? "audio-headset" : "preferences-system-bluetooth"
+                                source: modelData.isSupported ? "audio-headset" : "preferences-system-bluetooth"
                                 implicitWidth: Kirigami.Units.iconSizes.smallMedium
                                 implicitHeight: Kirigami.Units.iconSizes.smallMedium
                             }

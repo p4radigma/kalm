@@ -94,6 +94,7 @@ private:
         QMutex mtx;
         QWaitCondition cv;
         bool done = false;
+        bool aborted = false;
         Frame result;
     };
 
@@ -102,6 +103,7 @@ private:
         QMutex mtx;
         QWaitCondition cv;
         bool done = false;
+        bool aborted = false;
         RealmeOppoFrame result;
     };
 
@@ -110,6 +112,7 @@ private:
         QMutex mtx;
         QWaitCondition cv;
         bool done = false;
+        bool aborted = false;
         huawei::Packet result;
     };
 
@@ -191,7 +194,7 @@ private:
     ShowCallback m_onShowWindow;
     NotifyCallback m_onNotify;
     QString m_path;
-    SocketHandle m_serverFd = kInvalidSocket;
+    std::atomic<SocketHandle> m_serverFd{kInvalidSocket};
     std::atomic<bool> m_stop{false};
     std::thread m_thread;
 };

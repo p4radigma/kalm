@@ -42,7 +42,7 @@ DeviceRegistry::DeviceRegistry(const QString& customPath) {
 void DeviceRegistry::load() {
     QMutexLocker lock(&m_mutex);
     QFile f(m_path);
-    if (!f.exists() || !f.open(QIODevice::ReadOnly)) {
+    if (!f.exists() || f.size() > 2 * 1024 * 1024 || !f.open(QIODevice::ReadOnly)) {
         m_activeMac.clear();
         m_autoSwitch = true;
         m_language = QStringLiteral("en");
@@ -115,17 +115,21 @@ void DeviceRegistry::saveUnlocked() {
     };
     QSaveFile sf(m_path);
     if (sf.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        sf.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
         sf.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
         sf.commit();
     }
 }
 
 void DeviceRegistry::ensureInitialImport() {
+    {
+        QMutexLocker lock(&m_mutex);
+        if (m_initialized) return;
+        m_initialized = true;
+    }
+    const auto supportedDevs = listBluezDevices(true, false);
     QMutexLocker lock(&m_mutex);
-    if (m_initialized) return;
-    m_initialized = true;
-    const auto vivoDevs = listBluezDevices(true, false);
-    for (const auto& bdev : vivoDevs) {
+    for (const auto& bdev : supportedDevs) {
         addUnlocked(bdev.mac, bdev.name, {});
         if (bdev.connected && m_activeMac.isEmpty()) {
             m_activeMac = bdev.mac;

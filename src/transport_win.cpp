@@ -296,7 +296,7 @@ SocketHandle acceptLocalIpcClient(SocketHandle serverSock) {
     return (c != INVALID_SOCKET) ? static_cast<SocketHandle>(c) : kInvalidSocket;
 }
 
-QList<BluezDevice> listBluezDevices(bool onlyVivo, bool onlyAudio) {
+QList<BluezDevice> listBluezDevices(bool onlySupported, bool onlyAudio) {
     QList<BluezDevice> result;
 
     BLUETOOTH_DEVICE_SEARCH_PARAMS sp{};
@@ -342,7 +342,7 @@ QList<BluezDevice> listBluezDevices(bool onlyVivo, bool onlyAudio) {
             }
         }
 
-        if (onlyVivo && !item.isSupportedTws()) continue;
+        if (onlySupported && !item.isSupportedTws()) continue;
         if (onlyAudio && !item.isAudioDevice()) continue;
         result.append(std::move(item));
 

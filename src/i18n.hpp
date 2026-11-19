@@ -20,7 +20,7 @@ void initI18n(const QString& langSpec = QStringLiteral("en"));
 QString currentLanguage();
 QString trKey(const char* key);
 QString trKey(const QString& key);
-const QVariantMap& i18nVariantMap();
+QVariantMap i18nVariantMap();
 QList<LanguageOption> availableLanguages();
 
 }  // namespace kalm

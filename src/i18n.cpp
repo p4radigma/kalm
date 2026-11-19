@@ -9,24 +9,38 @@
 #include <QJsonObject>
 #include <QLocale>
 #include <QMap>
+#include <QMutexLocker>
+#include <QRecursiveMutex>
 #include <QStandardPaths>
 
 namespace kalm {
 
 namespace {
 
+constexpr qint64 kMaxTranslationFileBytes = 2 * 1024 * 1024;
+
+QRecursiveMutex g_i18nMutex;
 QVariantMap g_trMap;
 QString g_lang = QStringLiteral("en");
 bool g_initialized = false;
 
+bool isValidLangCode(const QString& code) {
+    if (code.size() < 2 || code.size() > 8) return false;
+    for (QChar ch : code) {
+        if (ch < u'a' || ch > u'z') return false;
+    }
+    return true;
+}
+
 QString extractLangCode(const QString& raw) {
     QString s = raw.trimmed();
-    const int dot = s.indexOf(u'.');
+    const qsizetype dot = s.indexOf(u'.');
     if (dot >= 0) s = s.left(dot);
     s.replace(u'-', u'_');
-    const int under = s.indexOf(u'_');
+    const qsizetype under = s.indexOf(u'_');
     if (under >= 0) s = s.left(under);
-    return s.toLower();
+    s = s.toLower();
+    return isValidLangCode(s) ? s : QString{};
 }
 
 QStringList searchDirectories() {
@@ -40,11 +54,11 @@ QStringList searchDirectories() {
     if (QCoreApplication::instance()) {
         dirs.append(QCoreApplication::applicationDirPath() + QStringLiteral("/translations"));
     }
-    dirs.append(QDir::currentPath() + QStringLiteral("/translations"));
     return dirs;
 }
 
 QStringList candidatePathsForLang(const QString& lang) {
+    if (!isValidLangCode(lang)) return {};
     QStringList files;
     for (const QString& d : searchDirectories()) {
         files.append(d + u'/' + lang + QStringLiteral(".json"));
@@ -55,7 +69,9 @@ QStringList candidatePathsForLang(const QString& lang) {
 
 bool mergeJsonFile(const QString& filePath, QVariantMap& target) {
     QFile f(filePath);
-    if (!f.exists() || !f.open(QIODevice::ReadOnly)) return false;
+    if (!f.exists() || f.size() > kMaxTranslationFileBytes || !f.open(QIODevice::ReadOnly)) {
+        return false;
+    }
     QJsonParseError err{};
     const auto doc = QJsonDocument::fromJson(f.readAll(), &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) return false;
@@ -70,7 +86,7 @@ bool mergeJsonFile(const QString& filePath, QVariantMap& target) {
 
 QString readLangDisplayName(const QString& filePath, const QString& fallbackCode) {
     QFile f(filePath);
-    if (f.exists() && f.open(QIODevice::ReadOnly)) {
+    if (f.exists() && f.size() <= kMaxTranslationFileBytes && f.open(QIODevice::ReadOnly)) {
         const auto doc = QJsonDocument::fromJson(f.readAll());
         if (doc.isObject()) {
             const QString nm = doc.object().value(QStringLiteral("lang_name")).toString().trimmed();
@@ -81,7 +97,7 @@ QString readLangDisplayName(const QString& filePath, const QString& fallbackCode
 }
 
 bool hasTranslationForLang(const QString& lang) {
-    if (lang.isEmpty()) return false;
+    if (!isValidLangCode(lang)) return false;
     for (const QString& p : candidatePathsForLang(lang)) {
         if (QFile::exists(p)) return true;
     }
@@ -124,23 +140,35 @@ QString resolveRequestedLanguage(const QString& langSpec) {
     return QStringLiteral("en");
 }
 
+void ensureInitializedUnlocked() {
+    if (!g_initialized) {
+        initI18n();
+    }
+}
+
 }  // namespace
 
 void initI18n(const QString& langSpec) {
-    g_trMap.clear();
-    mergeJsonFile(QStringLiteral(":/translations/en.json"), g_trMap);
+    QMutexLocker lock(&g_i18nMutex);
+    QVariantMap nextMap;
+    mergeJsonFile(QStringLiteral(":/translations/en.json"), nextMap);
 
-    g_lang = resolveRequestedLanguage(langSpec);
-    const QStringList paths = candidatePathsForLang(g_lang);
-    mergeJsonFile(paths.last(), g_trMap);  // Built-in qrc
-    for (qsizetype i = paths.size() - 2; i >= 0; --i) {
-        mergeJsonFile(paths[i], g_trMap);  // Disk overrides
+    const QString nextLang = resolveRequestedLanguage(langSpec);
+    const QStringList paths = candidatePathsForLang(nextLang);
+    if (!paths.isEmpty()) {
+        mergeJsonFile(paths.last(), nextMap);  // Built-in qrc
+        for (qsizetype i = paths.size() - 2; i >= 0; --i) {
+            mergeJsonFile(paths[i], nextMap);  // Disk overrides
+        }
     }
+    g_trMap = std::move(nextMap);
+    g_lang = nextLang;
     g_initialized = true;
 }
 
 QString currentLanguage() {
-    if (!g_initialized) initI18n();
+    QMutexLocker lock(&g_i18nMutex);
+    ensureInitializedUnlocked();
     return g_lang;
 }
 
@@ -149,17 +177,20 @@ QString trKey(const char* key) {
 }
 
 QString trKey(const QString& key) {
-    if (!g_initialized) initI18n();
+    QMutexLocker lock(&g_i18nMutex);
+    ensureInitializedUnlocked();
     return g_trMap.value(key, key).toString();
 }
 
-const QVariantMap& i18nVariantMap() {
-    if (!g_initialized) initI18n();
+QVariantMap i18nVariantMap() {
+    QMutexLocker lock(&g_i18nMutex);
+    ensureInitializedUnlocked();
     return g_trMap;
 }
 
 QList<LanguageOption> availableLanguages() {
-    if (!g_initialized) initI18n();
+    QMutexLocker lock(&g_i18nMutex);
+    ensureInitializedUnlocked();
     QMap<QString, QString> found;
     found.insert(QStringLiteral("en"), QStringLiteral("English"));
     found.insert(QStringLiteral("ru"), QStringLiteral("Русский"));
@@ -171,7 +202,7 @@ QList<LanguageOption> availableLanguages() {
         const auto entries = dir.entryInfoList({QStringLiteral("*.json")}, QDir::Files);
         for (const QFileInfo& fi : entries) {
             const QString code = fi.completeBaseName().trimmed().toLower();
-            if (!code.isEmpty() && !found.contains(code)) {
+            if (isValidLangCode(code) && !found.contains(code)) {
                 found.insert(code, readLangDisplayName(fi.absoluteFilePath(), code));
             }
         }

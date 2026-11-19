@@ -52,6 +52,7 @@ cp "$ROOT_DIR/assets/io.github.kalm.png" "$APPDIR/io.github.kalm.png"
 cp "$ROOT_DIR/assets/io.github.kalm.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/io.github.kalm.png"
 cp -r "$ROOT_DIR/translations" "$APPDIR/usr/share/kalm/"
 cp "$ROOT_DIR/models.json" "$APPDIR/usr/share/kalm/models.json"
+[[ -f "$ROOT_DIR/LICENSE" ]] && cp "$ROOT_DIR/LICENSE" "$APPDIR/usr/share/kalm/LICENSE"
 
 # 2. Required Qt6 & KF6 plugins (excluding heavy kimg_* RAW/AVIF/HEIF plugins)
 copy_plugin_dir() {

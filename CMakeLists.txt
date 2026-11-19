@@ -121,6 +121,7 @@ if(NOT WIN32)
     ")
 endif()
 install(DIRECTORY translations/ DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/kalm/translations)
+install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/licenses/kalm)
 
 option(BUILD_TESTING "Build unit tests" ON)
 if(BUILD_TESTING)

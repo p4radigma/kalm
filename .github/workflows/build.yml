@@ -145,6 +145,7 @@ jobs:
           Copy-Item build/kalm.exe dist/Kalm-win64/kalm.exe
           Copy-Item models.json dist/Kalm-win64/models.json
           Copy-Item README.md dist/Kalm-win64/README.md
+          Copy-Item LICENSE dist/Kalm-win64/LICENSE
           Copy-Item -Recurse translations dist/Kalm-win64/translations
 
           windeployqt --release --qmldir qml --no-translations --no-opengl-sw --compiler-runtime dist/Kalm-win64/kalm.exe

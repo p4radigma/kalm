@@ -153,25 +153,32 @@ Kirigami.ApplicationWindow {
             }
         ]
 
-        // Inline status/error message banner
-        Kirigami.InlineMessage {
+        // Inline status/error message banner (Loader ensures Kirigami's internal
+        // closeButton `root.visible = false` never breaks re-showing future banners)
+        Loader {
             id: inlineBanner
+            active: backend.bannerText.length > 0
+            visible: active
             Layout.fillWidth: true
             Layout.leftMargin: Kirigami.Units.largeSpacing
             Layout.rightMargin: Kirigami.Units.largeSpacing
             Layout.topMargin: Kirigami.Units.largeSpacing
-            visible: backend.bannerText.length > 0
-            text: backend.bannerText
-            type: {
-                if (backend.bannerType === 1) return Kirigami.MessageType.Positive
-                if (backend.bannerType === 2) return Kirigami.MessageType.Warning
-                if (backend.bannerType === 3) return Kirigami.MessageType.Error
-                return Kirigami.MessageType.Information
-            }
-            showCloseButton: true
-            onVisibleChanged: {
-                if (!visible && backend.bannerText.length > 0) {
-                    backend.clearBanner()
+
+            sourceComponent: Kirigami.InlineMessage {
+                width: inlineBanner.width
+                visible: true
+                text: backend.bannerText
+                type: {
+                    if (backend.bannerType === 1) return Kirigami.MessageType.Positive
+                    if (backend.bannerType === 2) return Kirigami.MessageType.Warning
+                    if (backend.bannerType === 3) return Kirigami.MessageType.Error
+                    return Kirigami.MessageType.Information
+                }
+                showCloseButton: true
+                onVisibleChanged: {
+                    if (!visible && backend.bannerText.length > 0) {
+                        backend.clearBanner()
+                    }
                 }
             }
         }

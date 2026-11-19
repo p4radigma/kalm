@@ -17,6 +17,7 @@
 #include <QRectF>
 #include <QSet>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
 
@@ -210,7 +211,11 @@ void KalmBackend::pushStateFromWorker(const EarbudState& st) {
                 Q_EMIT capabilitiesChanged();
                 Q_EMIT languageChanged();
             }
+            const bool becameConnected = (!m_state.connected && st.connected);
             m_state = st;
+            if (becameConnected && m_bannerType >= 2) {
+                clearBanner();
+            }
             if (!st.connected && m_ringing) {
                 m_ringing = false;
                 Q_EMIT ringingChanged();
@@ -246,7 +251,16 @@ void KalmBackend::pushShowFromWorker(const QString& activationToken) {
 void KalmBackend::setBannerMain(const QString& text, int type) {
     m_bannerText = text;
     m_bannerType = type;
+    const int seq = ++m_bannerSeq;
     Q_EMIT bannerChanged();
+
+    if (type == 1 && !text.isEmpty()) {
+        QTimer::singleShot(4000, this, [this, seq]() {
+            if (m_bannerSeq == seq && !m_bannerText.isEmpty()) {
+                clearBanner();
+            }
+        });
+    }
 }
 
 QString KalmBackend::deviceName() const {
@@ -555,20 +569,24 @@ void KalmBackend::selectSavedDevice(const QString& mac) {
 
 void KalmBackend::connectBluetoothDevice(const QString& mac) {
     setBannerMain(trKey("msg_connecting_bt").arg(mac), 0);
+    if (m_btConnecting) return;
+    m_btConnecting = true;
     m_pool.start([this, mac]() {
         const bool ok = connectBluezDevice(mac);
         if (ok) {
             m_session.forceReconnect();
-            QMetaObject::invokeMethod(
-                this,
-                [this]() { setBannerMain(trKey("msg_bt_connected"), 1); },
-                Qt::QueuedConnection);
-        } else {
-            QMetaObject::invokeMethod(
-                this,
-                [this]() { setBannerMain(trKey("msg_bt_failed"), 2); },
-                Qt::QueuedConnection);
         }
+        QMetaObject::invokeMethod(
+            this,
+            [this, ok]() {
+                m_btConnecting = false;
+                if (ok) {
+                    setBannerMain(trKey("msg_bt_connected"), 1);
+                } else {
+                    setBannerMain(trKey("msg_bt_failed"), 2);
+                }
+            },
+            Qt::QueuedConnection);
         refreshSavedDevicesAsync();
     });
 }
@@ -629,7 +647,9 @@ void KalmBackend::copyReportToClipboard() {
 }
 
 void KalmBackend::clearBanner() {
+    if (m_bannerText.isEmpty()) return;
     m_bannerText.clear();
+    ++m_bannerSeq;
     Q_EMIT bannerChanged();
 }
 

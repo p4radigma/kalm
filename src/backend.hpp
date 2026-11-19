@@ -79,6 +79,7 @@ class KalmBackend : public QObject {
 
     Q_PROPERTY(QString bannerText READ bannerText NOTIFY bannerChanged)
     Q_PROPERTY(int bannerType READ bannerType NOTIFY bannerChanged)
+    Q_PROPERTY(int bannerSeq READ bannerSeq NOTIFY bannerChanged)
     Q_PROPERTY(bool probeBusy READ probeBusy NOTIFY probeChanged)
     Q_PROPERTY(QString probeReport READ probeReport NOTIFY probeChanged)
 
@@ -150,6 +151,7 @@ public:
 
     QString bannerText() const { return m_bannerText; }
     int bannerType() const { return m_bannerType; }
+    int bannerSeq() const { return m_bannerSeq; }
     bool probeBusy() const { return m_probeBusy; }
     QString probeReport() const { return m_probeReport; }
 
@@ -213,6 +215,8 @@ private:
     QVariantList m_discoveredList;
     QString m_bannerText;
     int m_bannerType = 0;
+    int m_bannerSeq = 0;
+    bool m_btConnecting = false;
     bool m_probeBusy = false;
     QString m_probeReport;
     bool m_ringing = false;

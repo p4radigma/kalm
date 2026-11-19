@@ -28,6 +28,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QProcess>
 #include <QStandardPaths>
 #include <QUuid>
 
@@ -362,9 +363,52 @@ QList<BluezDevice> listBluezDevices(bool onlyVivo, bool onlyAudio) {
 }
 
 bool connectBluezDevice(const QString& mac) {
+    // Ensure Windows Bluetooth radio is powered on before paging the earbuds.
+    BLUETOOTH_FIND_RADIO_PARAMS radioParams{};
+    radioParams.dwSize = sizeof(radioParams);
+    HANDLE hRadio = nullptr;
+    HBLUETOOTH_RADIO_FIND hFindRadio = ::BluetoothFindFirstRadio(&radioParams, &hRadio);
+    if (hFindRadio != nullptr) {
+        if (hRadio != nullptr) ::CloseHandle(hRadio);
+        ::BluetoothFindRadioClose(hFindRadio);
+    } else {
+        QProcess ps;
+        ps.setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* args) {
+            args->flags |= CREATE_NO_WINDOW;
+        });
+        const QString script = QStringLiteral(
+            "Add-Type -AssemblyName System.Runtime.WindowsRuntime; "
+            "$asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | "
+            "Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and "
+            "$_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]; "
+            "Function Await($WinRtTask, $ResultType) { "
+            "$asTask = $asTaskGeneric.MakeGenericMethod($ResultType); "
+            "$netTask = $asTask.Invoke($null, @($WinRtTask)); "
+            "$netTask.Wait(-1) | Out-Null; $netTask.Result }; "
+            "[Windows.Devices.Radios.Radio,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null; "
+            "[Windows.Devices.Radios.RadioAccessStatus,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null; "
+            "Await ([Windows.Devices.Radios.Radio]::RequestAccessAsync()) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null; "
+            "$radios = Await ([Windows.Devices.Radios.Radio]::GetRadiosAsync()) "
+            "([System.Collections.Generic.IReadOnlyList[Windows.Devices.Radios.Radio]]); "
+            "$bt = $radios | Where-Object { $_.Kind -eq 'Bluetooth' }; "
+            "[Windows.Devices.Radios.RadioState,Windows.System.Devices,ContentType=WindowsRuntime] | Out-Null; "
+            "foreach ($r in $bt) { Await ($r.SetStateAsync('On')) ([Windows.Devices.Radios.RadioAccessStatus]) | Out-Null }");
+        ps.start(QStringLiteral("powershell.exe"),
+                 {QStringLiteral("-NoProfile"), QStringLiteral("-NonInteractive"),
+                  QStringLiteral("-Command"), script});
+        ps.waitForFinished(4500);
+        ::Sleep(600);
+    }
+
+    const auto dev = findBluezByMac(mac);
     // On Windows, opening an RFCOMM socket to a paired device pages and connects it at the OS level.
     try {
-        auto conn = openGaiaRfcomm(mac, {}, {}, 5000);
+        auto conn = openEarbudRfcomm(
+            mac,
+            dev ? dev->path : QString{},
+            dev ? dev->name : QString{},
+            dev ? dev->uuids : QStringList{},
+            5500);
         return static_cast<bool>(conn.fd);
     } catch (...) {
         return false;

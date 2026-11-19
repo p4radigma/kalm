@@ -2,10 +2,10 @@ name: Build & Release (Linux & Windows)
 
 on:
   push:
-    branches: [main, universal]
+    branches: [main]
     tags: ["v*"]
   pull_request:
-    branches: [main, universal]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -183,6 +183,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ github.ref_name }}
           generate_release_notes: true
           files: |
             artifacts/kalm-universal-linux-x86_64/Kalm-x86_64.AppImage

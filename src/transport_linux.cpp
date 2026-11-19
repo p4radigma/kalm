@@ -10,6 +10,7 @@
 #include <QDBusMessage>
 #include <QDBusObjectPath>
 #include <QDBusUnixFileDescriptor>
+#include <QDBusVariant>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -17,6 +18,8 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
+#include <QProcess>
 #include <QStandardPaths>
 #include <QTimer>
 
@@ -402,16 +405,124 @@ QList<BluezDevice> listBluezDevices(bool onlyVivo, bool onlyAudio) {
     return result;
 }
 
+namespace {
+
+QMap<QString, bool> queryBluezAdapters(QDBusConnection& bus) {
+    QMap<QString, bool> adapters;
+    if (!bus.isConnected()) return adapters;
+
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        QStringLiteral("org.bluez"),
+        QStringLiteral("/"),
+        QStringLiteral("org.freedesktop.DBus.ObjectManager"),
+        QStringLiteral("GetManagedObjects"));
+    const QDBusMessage reply = bus.call(msg, QDBus::Block, 2000);
+    if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
+        return adapters;
+    }
+
+    const auto rootArg = reply.arguments().at(0).value<QDBusArgument>();
+    rootArg.beginMap();
+    while (!rootArg.atEnd()) {
+        rootArg.beginMapEntry();
+        QDBusObjectPath objPath;
+        rootArg >> objPath;
+
+        rootArg.beginMap();
+        while (!rootArg.atEnd()) {
+            rootArg.beginMapEntry();
+            QString ifaceName;
+            QVariantMap props;
+            rootArg >> ifaceName >> props;
+            if (ifaceName == u"org.bluez.Adapter1") {
+                adapters.insert(objPath.path(), props.value(QStringLiteral("Powered")).toBool());
+            }
+            rootArg.endMapEntry();
+        }
+        rootArg.endMap();
+        rootArg.endMapEntry();
+    }
+    rootArg.endMap();
+    return adapters;
+}
+
+void unblockBluetoothRfkill() {
+    struct RfkillEventK {
+        uint32_t idx;
+        uint8_t type;
+        uint8_t op;
+        uint8_t soft;
+        uint8_t hard;
+    } __attribute__((packed));
+
+    constexpr uint8_t kRfkillTypeBluetooth = 2;
+    constexpr uint8_t kRfkillOpChangeAll = 3;
+
+    const int fd = ::open("/dev/rfkill", O_RDWR | O_CLOEXEC | O_NONBLOCK);
+    if (fd >= 0) {
+        const RfkillEventK ev{0, kRfkillTypeBluetooth, kRfkillOpChangeAll, 0, 0};
+        const ssize_t wr = ::write(fd, &ev, sizeof(ev));
+        (void)wr;
+        ::close(fd);
+        return;
+    }
+
+    const QString rfkillBin = QStandardPaths::findExecutable(QStringLiteral("rfkill"));
+    if (!rfkillBin.isEmpty()) {
+        QProcess::execute(rfkillBin, {QStringLiteral("unblock"), QStringLiteral("bluetooth")});
+    }
+}
+
+void ensureBluetoothAdapterPowered(QDBusConnection& bus) {
+    const auto initial = queryBluezAdapters(bus);
+    for (auto it = initial.cbegin(); it != initial.cend(); ++it) {
+        if (it.value()) return;
+    }
+
+    unblockBluetoothRfkill();
+    ::usleep(150 * 1000);
+
+    for (int attempt = 0; attempt < 25; ++attempt) {
+        const auto cur = queryBluezAdapters(bus);
+        for (auto it = cur.cbegin(); it != cur.cend(); ++it) {
+            if (it.value()) {
+                ::usleep(350 * 1000);
+                return;
+            }
+        }
+        for (auto it = cur.cbegin(); it != cur.cend(); ++it) {
+            if (!it.value()) {
+                QDBusMessage setMsg = QDBusMessage::createMethodCall(
+                    QStringLiteral("org.bluez"),
+                    it.key(),
+                    QStringLiteral("org.freedesktop.DBus.Properties"),
+                    QStringLiteral("Set"));
+                setMsg << QStringLiteral("org.bluez.Adapter1")
+                       << QStringLiteral("Powered")
+                       << QVariant::fromValue(QDBusVariant(true));
+                bus.call(setMsg, QDBus::Block, 1000);
+            }
+        }
+        ::usleep(100 * 1000);
+    }
+}
+
+}  // namespace
+
 bool connectBluezDevice(const QString& mac) {
+    QDBusConnection bus = QDBusConnection::systemBus();
+    if (!bus.isConnected()) return false;
+
+    ensureBluetoothAdapterPowered(bus);
+
     const auto dev = findBluezByMac(mac);
     if (!dev) return false;
-    QDBusConnection bus = QDBusConnection::systemBus();
     QDBusMessage msg = QDBusMessage::createMethodCall(
         QStringLiteral("org.bluez"),
         dev->path,
         QStringLiteral("org.bluez.Device1"),
         QStringLiteral("Connect"));
-    const QDBusMessage reply = bus.call(msg, QDBus::Block, 10000);
+    const QDBusMessage reply = bus.call(msg, QDBus::Block, 12000);
     return reply.type() == QDBusMessage::ReplyMessage;
 }
 

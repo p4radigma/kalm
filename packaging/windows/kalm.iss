@@ -1,5 +1,5 @@
 #define MyAppName "Kalm"
-#define MyAppVersion "0.5.1"
+#define MyAppVersion "0.5.11"
 #define MyAppPublisher "p4radigma"
 #define MyAppURL "https://github.com/p4radigma/kalm"
 #define MyAppExeName "kalm.exe"

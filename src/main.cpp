@@ -267,7 +267,7 @@ int launchGui(const QString& targetDevice, bool startMinimized, const QString& l
 #ifdef KALM_DISPLAY_VERSION
     app.setApplicationVersion(QStringLiteral(KALM_DISPLAY_VERSION));
 #else
-    app.setApplicationVersion(QStringLiteral("0.5.1"));
+    app.setApplicationVersion(QStringLiteral("0.5.11"));
 #endif
     app.setDesktopFileName(QStringLiteral("io.github.kalm"));
     app.setQuitOnLastWindowClosed(false);
@@ -540,7 +540,7 @@ int main(int argc, char** argv) {
 #ifdef KALM_DISPLAY_VERSION
         std::cout << "kalm " << KALM_DISPLAY_VERSION << "\n";
 #else
-        std::cout << "kalm 0.5.1\n";
+        std::cout << "kalm 0.5.11\n";
 #endif
         return 0;
     }

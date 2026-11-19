@@ -16,11 +16,11 @@ ApplicationWindow {
     readonly property color accentBlue: "#38BDF8"
     readonly property color pillBg: "#273549"
 
-    title: backend.deviceName ? (backend.deviceName + " — Kalm") : "Kalm"
-    width: 580
-    height: 680
-    minimumWidth: 460
-    minimumHeight: 500
+    title: (backend.connected && backend.deviceName) ? (backend.deviceName + " — Kalm") : "Kalm"
+    width: 640
+    height: 740
+    minimumWidth: 500
+    minimumHeight: 540
     color: root.bgColor
 
     onClosing: function(close) {
@@ -78,7 +78,8 @@ ApplicationWindow {
             }
 
             Button {
-                text: backend.connected ? root.i18n.action_refresh : root.i18n.action_connect
+                visible: backend.connected
+                text: root.i18n.action_refresh
                 onClicked: backend.refreshNow()
             }
         }
@@ -207,13 +208,14 @@ ApplicationWindow {
 
         ColumnLayout {
             id: mainCol
-            width: Math.min(mainFlick.width - 32, 560)
+            width: Math.min(mainFlick.width - 32, 580)
             anchors.horizontalCenter: parent.horizontalCenter
             y: 16
             spacing: 0
 
             // Inline Banner
             Rectangle {
+                id: winBanner
                 visible: backend.bannerText.length > 0
                 Layout.fillWidth: true
                 Layout.bottomMargin: 12
@@ -247,7 +249,12 @@ ApplicationWindow {
             Item {
                 visible: !backend.connected
                 Layout.fillWidth: true
-                Layout.preferredHeight: Math.max(320, mainFlick.height - 90)
+                Layout.preferredHeight: Math.max(
+                    300,
+                    mainFlick.height - 16
+                    - (winBanner.visible ? (winBanner.height + 12) : 0)
+                    - winFooter.implicitHeight - 28
+                )
 
                 ColumnLayout {
                     anchors.centerIn: parent
@@ -951,9 +958,10 @@ ApplicationWindow {
 
             // ---- Subtle Version Footer ----
             Label {
+                id: winFooter
                 Layout.fillWidth: true
-                Layout.topMargin: 14
-                Layout.bottomMargin: 4
+                Layout.topMargin: backend.connected ? 14 : 0
+                Layout.bottomMargin: 12
                 horizontalAlignment: Text.AlignHCenter
                 text: backend.appVersion
                 font.pixelSize: 11
@@ -970,7 +978,7 @@ ApplicationWindow {
         title: root.i18n.dlg_add_title
         modal: true
         anchors.centerIn: parent
-        width: Math.min(root.width - 40, 460)
+        width: Math.min(root.width - 40, 520)
         standardButtons: Dialog.Close
 
         contentItem: ColumnLayout {
@@ -983,26 +991,41 @@ ApplicationWindow {
                 Layout.fillWidth: true
             }
 
-            Repeater {
-                model: backend.discoveredDevices
+            ScrollView {
+                id: winDiscoveredScroll
+                visible: backend.discoveredDevices.length > 0
+                Layout.fillWidth: true
+                Layout.preferredHeight: Math.min(winDiscoveredCol.implicitHeight, Math.max(150, Math.round(root.height * 0.34)))
+                clip: true
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                delegate: RowLayout {
-                    required property var modelData
-                    Layout.fillWidth: true
-                    spacing: 10
+                ColumnLayout {
+                    id: winDiscoveredCol
+                    width: winDiscoveredScroll.availableWidth
+                    spacing: 8
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 1
-                        Label { text: modelData.name; color: root.textPrimary; font.weight: Font.Medium }
-                        Label { text: modelData.subtitle; color: root.textSecondary; font.pixelSize: 11 }
-                    }
+                    Repeater {
+                        model: backend.discoveredDevices
 
-                    Button {
-                        text: modelData.alreadySaved ? root.i18n.action_select : root.i18n.action_add
-                        onClicked: {
-                            backend.addSavedDevice(modelData.mac, modelData.name, "")
-                            addDeviceDialog.close()
+                        delegate: RowLayout {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            spacing: 10
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+                                Label { text: modelData.name; color: root.textPrimary; font.weight: Font.Medium; elide: Text.ElideRight; Layout.fillWidth: true }
+                                Label { text: modelData.subtitle; color: root.textSecondary; font.pixelSize: 11; elide: Text.ElideRight; Layout.fillWidth: true }
+                            }
+
+                            Button {
+                                text: modelData.alreadySaved ? root.i18n.action_select : root.i18n.action_add
+                                onClicked: {
+                                    backend.addSavedDevice(modelData.mac, modelData.name, "")
+                                    addDeviceDialog.close()
+                                }
+                            }
                         }
                     }
                 }

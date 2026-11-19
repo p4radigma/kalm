@@ -10,13 +10,13 @@ Kirigami.ApplicationWindow {
     id: root
 
     readonly property var i18n: backend.i18n
-    readonly property real cardMaxW: Kirigami.Units.gridUnit * 32
+    readonly property real cardMaxW: Kirigami.Units.gridUnit * 35
 
-    title: backend.deviceName ? (backend.deviceName + " — Kalm") : "Kalm"
-    width: Kirigami.Units.gridUnit * 34
-    height: Kirigami.Units.gridUnit * 32
-    minimumWidth: Kirigami.Units.gridUnit * 28
-    minimumHeight: Kirigami.Units.gridUnit * 24
+    title: (backend.connected && backend.deviceName) ? (backend.deviceName + " — Kalm") : "Kalm"
+    width: Kirigami.Units.gridUnit * 38
+    height: Kirigami.Units.gridUnit * 38
+    minimumWidth: Kirigami.Units.gridUnit * 30
+    minimumHeight: Kirigami.Units.gridUnit * 28
 
     onClosing: function(close) {
         if (!backend.quitting) {
@@ -133,6 +133,7 @@ Kirigami.ApplicationWindow {
     pageStack.initialPage: FormCard.FormCardPage {
         id: mainPage
         title: "Kalm"
+        bottomPadding: 0
         verticalScrollBarPolicy: Controls.ScrollBar.AlwaysOff
 
         actions: [
@@ -145,7 +146,8 @@ Kirigami.ApplicationWindow {
                 }
             },
             Kirigami.Action {
-                text: backend.connected ? root.i18n.action_refresh : root.i18n.action_connect
+                visible: backend.connected
+                text: root.i18n.action_refresh
                 icon.name: "view-refresh-symbolic"
                 onTriggered: backend.refreshNow()
             }
@@ -153,6 +155,7 @@ Kirigami.ApplicationWindow {
 
         // Inline status/error message banner
         Kirigami.InlineMessage {
+            id: inlineBanner
             Layout.fillWidth: true
             Layout.leftMargin: Kirigami.Units.largeSpacing
             Layout.rightMargin: Kirigami.Units.largeSpacing
@@ -177,7 +180,13 @@ Kirigami.ApplicationWindow {
         Item {
             visible: !backend.connected
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.max(Kirigami.Units.gridUnit * 16, mainPage.height - Kirigami.Units.gridUnit * 6)
+            Layout.preferredHeight: Math.max(
+                Kirigami.Units.gridUnit * 14,
+                mainPage.flickable.height
+                - (inlineBanner.visible ? (inlineBanner.height + Kirigami.Units.largeSpacing) : 0)
+                - versionFooter.implicitHeight
+                - Kirigami.Units.largeSpacing
+            )
 
             ColumnLayout {
                 anchors.centerIn: parent
@@ -753,8 +762,9 @@ Kirigami.ApplicationWindow {
 
         // ---- Subtle Version Footer ----
         Controls.Label {
+            id: versionFooter
             Layout.fillWidth: true
-            Layout.topMargin: Kirigami.Units.largeSpacing
+            Layout.topMargin: backend.connected ? Kirigami.Units.largeSpacing : 0
             Layout.bottomMargin: Kirigami.Units.largeSpacing
             horizontalAlignment: Text.AlignHCenter
             text: backend.appVersion
@@ -767,39 +777,65 @@ Kirigami.ApplicationWindow {
     FormCard.FormCardDialog {
         id: addDeviceDialog
         title: root.i18n.dlg_add_title
+        width: Math.min(root.width - Kirigami.Units.gridUnit * 3, Kirigami.Units.gridUnit * 32)
         standardButtons: Controls.Dialog.Close
 
         FormCard.FormSectionText {
             text: root.i18n.dlg_add_hint
         }
 
-        Repeater {
-            model: backend.discoveredDevices
+        FormCard.FormDelegateSeparator {
+            visible: backend.discoveredDevices.length > 0
+        }
 
-            delegate: ColumnLayout {
-                required property var modelData
-                Layout.fillWidth: true
+        Controls.ScrollView {
+            id: discoveredScroll
+            visible: backend.discoveredDevices.length > 0
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(
+                discoveredListCol.implicitHeight,
+                Math.max(Kirigami.Units.gridUnit * 7, Math.round(root.height * 0.34))
+            )
+            clip: true
+            Controls.ScrollBar.horizontal.policy: Controls.ScrollBar.AlwaysOff
+
+            ColumnLayout {
+                id: discoveredListCol
+                width: discoveredScroll.availableWidth
                 spacing: 0
 
-                FormCard.FormDelegateSeparator {}
+                Repeater {
+                    model: backend.discoveredDevices
 
-                FormCard.FormTextDelegate {
-                    text: modelData.name
-                    description: modelData.subtitle
-                    leadingPadding: Kirigami.Units.largeSpacing + Kirigami.Units.smallSpacing
+                    delegate: ColumnLayout {
+                        required property var modelData
+                        required property int index
+                        Layout.fillWidth: true
+                        spacing: 0
 
-                    leading: Kirigami.Icon {
-                        source: modelData.isVivo ? "audio-headset" : "preferences-system-bluetooth"
-                        implicitWidth: Kirigami.Units.iconSizes.smallMedium
-                        implicitHeight: Kirigami.Units.iconSizes.smallMedium
-                    }
+                        FormCard.FormDelegateSeparator {
+                            visible: index > 0
+                        }
 
-                    trailing: Controls.Button {
-                        text: modelData.alreadySaved ? root.i18n.action_select : root.i18n.action_add
-                        icon.name: modelData.alreadySaved ? "dialog-ok-apply" : "list-add-symbolic"
-                        onClicked: {
-                            backend.addSavedDevice(modelData.mac, modelData.name, "")
-                            addDeviceDialog.close()
+                        FormCard.FormTextDelegate {
+                            text: modelData.name
+                            description: modelData.subtitle
+                            leadingPadding: Kirigami.Units.largeSpacing + Kirigami.Units.smallSpacing
+
+                            leading: Kirigami.Icon {
+                                source: modelData.isVivo ? "audio-headset" : "preferences-system-bluetooth"
+                                implicitWidth: Kirigami.Units.iconSizes.smallMedium
+                                implicitHeight: Kirigami.Units.iconSizes.smallMedium
+                            }
+
+                            trailing: Controls.Button {
+                                text: modelData.alreadySaved ? root.i18n.action_select : root.i18n.action_add
+                                icon.name: modelData.alreadySaved ? "dialog-ok-apply" : "list-add-symbolic"
+                                onClicked: {
+                                    backend.addSavedDevice(modelData.mac, modelData.name, "")
+                                    addDeviceDialog.close()
+                                }
+                            }
                         }
                     }
                 }
@@ -855,6 +891,7 @@ Kirigami.ApplicationWindow {
         id: renameDialog
         property string targetMac: ""
         title: root.i18n.dlg_rename_title
+        width: Math.min(root.width - Kirigami.Units.gridUnit * 3, Kirigami.Units.gridUnit * 26)
         standardButtons: Controls.Dialog.Save | Controls.Dialog.Cancel
 
         onAccepted: {
@@ -874,6 +911,7 @@ Kirigami.ApplicationWindow {
     FormCard.FormCardDialog {
         id: findConfirmDialog
         title: root.i18n.find_warn_title
+        width: Math.min(root.width - Kirigami.Units.gridUnit * 3, Kirigami.Units.gridUnit * 26)
         standardButtons: Controls.Dialog.Yes | Controls.Dialog.Cancel
 
         onAccepted: backend.startFindEarbuds()
@@ -894,6 +932,7 @@ Kirigami.ApplicationWindow {
     FormCard.FormCardDialog {
         id: probeDialog
         title: root.i18n.dlg_probe_title
+        width: Math.min(root.width - Kirigami.Units.gridUnit * 3, Kirigami.Units.gridUnit * 32)
         standardButtons: Controls.Dialog.Close
 
         FormCard.FormSectionText {

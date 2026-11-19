@@ -154,7 +154,16 @@ KalmSession::KalmSession(DeviceRegistry& registry,
       m_onStateChanged(std::move(onStateChanged)),
       m_onDevicesChanged(std::move(onDevicesChanged)),
       m_onError(std::move(onError)),
-      m_profile(selectProfile({})) {}
+      m_profile(selectProfile({})) {
+    if (auto active = !m_overrideMac.isEmpty() ? m_registry.get(m_overrideMac) : m_registry.getActive()) {
+        m_state.deviceName = active->displayName();
+        m_state.deviceMac = active->mac;
+        updateProtocolHint(active->name);
+    } else if (!m_overrideMac.isEmpty()) {
+        m_state.deviceName = m_overrideMac;
+        m_state.deviceMac = m_overrideMac;
+    }
+}
 
 KalmSession::~KalmSession() { stop(); }
 
@@ -250,6 +259,7 @@ void KalmSession::start() {
         m_state.deviceMac = active->mac;
         updateProtocolHint(active->name);
     }
+    emitState();
     if (m_worker.joinable()) return;
     m_stop.store(false);
     m_worker = std::thread(&KalmSession::runLoop, this);
@@ -893,11 +903,18 @@ void KalmSession::runLoop() {
         const QString rawBtName = (chosenBluez && !chosenBluez->name.isEmpty())
                                       ? chosenBluez->name
                                       : (!chosen->name.isEmpty() ? chosen->name : chosen->displayName());
+        bool identityChanged = false;
         {
             QMutexLocker lock(&m_lock);
-            m_state.deviceName = chosen->displayName();
-            m_state.deviceMac = chosen->mac;
+            if (m_state.deviceName != chosen->displayName() || m_state.deviceMac != chosen->mac) {
+                m_state.deviceName = chosen->displayName();
+                m_state.deviceMac = chosen->mac;
+                identityChanged = true;
+            }
             updateProtocolHint(rawBtName, chosenBluez ? chosenBluez->uuids : QStringList{});
+        }
+        if (identityChanged) {
+            emitState();
         }
 
         if (!chosenBluez || !chosenBluez->connected) {

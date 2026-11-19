@@ -20,7 +20,7 @@ Universal native desktop application and CLI (**C++20 / Qt 6**) for controlling 
   - **System Tray & Instant CLI**: Mode-colored tray icon, middle-click ANC toggle, right-click quick menu, and sub-millisecond CLI commands via local IPC (`kalm toggle`, `kalm anc`, `kalm status`) ideal for global keyboard shortcuts and status bars (Waybar / Polybar).
 - **Multi-Device Management**: Pair/scan multiple earbuds, set custom aliases, and switch manually or automatically when connected.
 - **Built-in Multi-Vendor Protocol Probe**: 1-click privacy-safe RFCOMM diagnostic scanner (`kalm probe` / Drawer → *Diagnostic Report…*) for adding support for new wireless earbuds.
-- **Localization**: **English** (default) and **Russian** built-in, switchable live in **Drawer (☰) → Language** or via CLI, with zero-rebuild JSON extensibility.
+- **Localization**: **English** (default) and **Russian** built-in, switchable live in **Drawer (☰) → Language** or via CLI, with zero-rebuild JSON extensibility (see [Translations](docs/TRANSLATIONS.md)).
 
 ---
 
@@ -43,7 +43,7 @@ Universal native desktop application and CLI (**C++20 / Qt 6**) for controlling 
 | **vivo / iQOO GAIA v3 (`0xFF`)** | **vivo TWS 3e**, **vivo TWS Air3 Pro**, **iQOO TWS Air3 Pro** — ANC, EQ, Game Mode, Multipoint & battery; non-ANC models (*vivo TWS 5i / 3i / Air3 / Air2*, *iQOO TWS 5i / 1i / Air3*) support battery, EQ & Multipoint |
 | **realme / OPPO / OnePlus (`0xAA`)** | **realme Buds** (*Air / T-series*), **OPPO Enco**, and **OnePlus Buds** models using the `0xAA` RFCOMM link protocol — ANC / Transparency / Off switching, battery & firmware *(EQ, Game Mode & Multipoint planned)* |
 
-*Using different wireless earbuds? Run `kalm probe` and open a [New Wireless Earbuds Support](#requesting-support-for-new-earbuds-what-users-need-to-do) issue!*
+*Using different wireless earbuds? Run `kalm probe` and follow the [New Earbuds Guide](CONTRIBUTING.md#requesting-support-for-new-earbuds)!*
 
 ---
 
@@ -62,7 +62,7 @@ chmod +x Kalm-x86_64.AppImage
 ```
 
 **Linux — Option 2 (Lightweight Native Binary ~770 KB, uses system Qt6 & Kirigami):**
-Install runtime packages for your distro (see [Dependencies](#dependencies)), download `kalm-linux-x86_64` from [Releases](https://github.com/p4radigma/kalm/releases), and run:
+Install runtime packages for your distro (see [Building & Dependencies](docs/BUILDING.md)), download `kalm-linux-x86_64` from [Releases](https://github.com/p4radigma/kalm/releases), and run:
 ```bash
 chmod +x kalm-linux-x86_64
 ./kalm-linux-x86_64
@@ -86,132 +86,12 @@ kalm devices [list|scan|add <MAC> --alias <name>|use <name>|rename <name> <new>|
 
 ---
 
-## Dependencies (Linux Native Build)
+## Documentation
 
-| Scope | Packages / Components |
-|---|---|
-| **Build** | `cmake >= 3.20`, C++20 compiler (`g++ >= 11` or `clang++ >= 14`), `Qt6` headers (`Core`, `Gui`, `Widgets`, `DBus`, `Qml`, `Quick`) |
-| **Runtime (Required)** | `BlueZ` + `D-Bus`, `Qt 6.5+` (`Base`, `Declarative/Quick`), `KDE Kirigami 6` (`org.kde.kirigami`), `Kirigami Addons` (`formcard`, `delegates`) |
-| **Runtime (Recommended)** | `qqc2-desktop-style` & `breeze-icons` (native KDE styling), `libnotify` / `notify-send` (for `--notify`) |
-
-### Installing Dependencies by Distro
-
-**Fedora:**
-```bash
-sudo dnf install cmake gcc-c++ qt6-qtbase-devel qt6-qtdeclarative-devel \
-  kf6-kirigami kf6-kirigami-addons kf6-qqc2-desktop-style kf6-breeze-icons bluez libnotify
-```
-
-**Debian (13+) / Ubuntu (24.10+):**
-```bash
-sudo apt install cmake g++ qt6-base-dev qt6-declarative-dev \
-  qml6-module-qtquick-controls qml6-module-qtquick-layouts \
-  qml6-module-org-kde-kirigami qml6-module-org-kde-kirigamiaddons-formcard \
-  qml6-module-org-kde-kirigamiaddons-delegates qml6-module-org-kde-desktop \
-  breeze-icon-theme bluez libnotify-bin
-```
-
-**Arch Linux / Manjaro / EndeavourOS:**
-```bash
-sudo pacman -S --needed cmake gcc qt6-base qt6-declarative \
-  kirigami kirigami-addons qqc2-desktop-style breeze-icons bluez libnotify
-```
-
-**openSUSE (Tumbleweed / Leap 16):**
-```bash
-sudo zypper install cmake gcc-c++ qt6-base-devel qt6-declarative-devel \
-  kf6-kirigami kf6-kirigami-addons kf6-qqc2-desktop-style breeze6-icons bluez libnotify-tools
-```
-
-**Void Linux:**
-```bash
-sudo xbps-install -S cmake gcc qt6-base-devel qt6-declarative-devel \
-  kf6-kirigami kf6-kirigami-addons kf6-qqc2-desktop-style breeze-icons bluez libnotify
-```
-
----
-
-## Build & Install
-
-**Windows (Visual Studio 2022 + Qt 6.8+ + CMake/Ninja):**
-```powershell
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --parallel
-windeployqt --release --qmldir qml build/kalm.exe
-```
-
-**Linux (All Distros):**
-```bash
-git clone https://github.com/p4radigma/kalm.git
-cd kalm
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-sudo cmake --install build
-```
-*(User-local install without root: `cmake --install build --prefix ~/.local`)*
-
----
-
-## Adding Translations
-
-`translations/en.json` and `translations/ru.json` are embedded into the binary. To add a new language (e.g. `de`) **without recompiling**:
-1. Copy `translations/en.json` to `~/.local/share/kalm/translations/de.json` on Linux (or `translations/de.json` next to `kalm.exe` on Windows) and set `"lang_name"` (e.g. `"Deutsch"`).
-2. Translate the values (untranslated keys automatically fall back to `en.json`).
-3. Select it in **Drawer (☰) → Language** or run `kalm lang de`.
-
----
-
-## Contributing
-
-Contributions, bug fixes, translations, and new wireless earbud protocols/profiles are welcome!
-
-### AI Coding Agents Policy
-- **AI coding agents and LLM-assisted PRs are explicitly allowed and welcome.**
-- Please ensure every PR compiles cleanly (`cmake --build build`), passes all unit tests (`ctest --test-dir build --output-on-failure`), stays focused on a single concern, and clearly notes whether protocol changes were verified on real hardware or inferred.
-
-### How to Open Issues
-Use the repository Issue Templates:
-- **Bug Report** — include your OS / Linux distro, Kalm version, earbud model, and output of `kalm status` / `kalm probe`.
-- **New Wireless Earbuds Support** — follow the steps below so we have everything needed to add your earbuds quickly.
-
-### Requesting Support for New Earbuds (What Users Need to Do)
-1. Pair and connect your earbuds via Bluetooth, and **take both earbuds out of the charging case**.
-2. Collect a read-only diagnostic dump (personal MAC bytes, serial numbers, and paired host names are automatically masked):
-   - **From GUI:** open **Drawer (☰) → Diagnostic Report… → Copy Report to Clipboard**.
-   - **From terminal:** run `kalm probe` (or `kalm probe -d "Your Earbuds Name"`).
-3. *(Optional, very helpful for unknown protocols)* Run live event capture for 15 seconds while toggling ANC / Transparency / Off on the earbuds (or in the mobile app connected via multipoint):
-   ```bash
-   kalm probe --listen 15
-   ```
-4. Open a **New Wireless Earbuds Support** issue and paste the output along with the list of features available in the official mobile app.
-
-### Adding New Protocols & Profiles (Contributor Guide)
-- **Protocol codecs & state mapping**: `src/protocol.*` (vivo GAIA `0xFF` & realme/OPPO Link `0xAA`) and `src/huawei.*` (HUAWEI SPP `0x5A`).
-- **Transport & auto-detection**: `src/transport_common.cpp` (`openEarbudRfcomm`) + `SessionCapabilities` in `src/session.*` so both Linux (`qml/Main.qml`) and Windows (`qml/MainWin.qml`) UIs adapt automatically.
-- **vivo / iQOO GAIA model overrides**: wire-level profile overrides can be tested without recompiling via `~/.config/kalm/models.json` (matching [`models.json`](models.json)).
-- **Credits & licensing**: any third-party protocol documentation or open-source reference must be compatible with **GPL-3.0-or-later**; please update the [Credits & Acknowledgments](#credits--acknowledgments) section whenever adding a new protocol reference, contributor, or hardware tester.
-
----
-
-## Credits & Acknowledgments
-
-### Contributors & Hardware Verification
-- **[@p4radigma](https://github.com/p4radigma)** — Project creator, architecture, vivo / iQOO Compact GAIA & realme / OPPO Link implementations, Windows port, and hardware verification on *vivo TWS 5 Hi-Fi*.
-- **[@aboba1414](https://github.com/aboba1414)** — HUAWEI FreeBuds / FreeLace SPP protocol driver, dynamic `SessionCapabilities` UI/tray model, MPRIS wear auto-pause, Kirigami popup delegate fix, hardware verification on *HUAWEI FreeBuds 6i* ([#2](https://github.com/p4radigma/kalm/pull/2)), and AppImage `libselinux` bundling fix ([#3](https://github.com/p4radigma/kalm/pull/3)).
-- **[@Gitveu](https://github.com/Gitveu)** — RFCOMM diagnostics and live hardware testing for *realme Buds T300* on Windows 11 ([#1](https://github.com/p4radigma/kalm/issues/1)).
-
-### Protocol Research & Open-Source References
-Kalm's C++20 protocol codecs were built with reference to interoperability documentation, packet captures, and prior open-source community research:
-- **[OpenFreebuds](https://github.com/melianmiko/OpenFreebuds)** (`GPL-3.0`, by [@melianmiko](https://github.com/melianmiko)) — HUAWEI FreeBuds / FreeLace `0x5A` SPP framing, CRC16-XMODEM, TLV command IDs, and model capability profiles.
-- **[Pods-Protocol-Reverse-Engineering](https://github.com/Star-ZER0/Pods-Protocol-Reverse-Engineering)** (`CC-BY-SA-4.0`, by [@Star-ZER0](https://github.com/Star-ZER0)) — Initial Bluetooth RFCOMM framing notes for vivo TWS earbuds.
-- **[EncoDeck](https://github.com/TIANLI0/EncoDeck)** (`GPL-3.0`), **[vivopods-mac](https://github.com/FxRayHughes/vivopods-mac)** (`GPL-3.0`), **[TWS-Pods-PC](https://github.com/Zhaoyi-ya/TWS-Pods-PC)** (`GPL-3.0`), **[HyperEars](https://github.com/silverpoetry/HyperEars)** (`GPL-3.0`), **[vivo-tws-watch-control](https://github.com/hdzw1155/vivo-tws-watch-control)** (`MIT`), and **[ScrewVivoTWS](https://github.com/moculll/ScrewVivoTWS)** — Prior community work and cross-references on vivo Compact GAIA (`0xFF`) and OPPO / OnePlus / realme (`0xAA`) command families.
-- Official vendor companion Android packages (*vivo Earphones* & *realme Link*), inspected solely for clean-room Bluetooth RFCOMM interoperability (UUIDs, command/notification opcodes, and ANC preset enumerations).
-
-### Libraries & Tooling
-- **[Qt 6](https://www.qt.io/)** (`LGPL-3.0` / `GPL-3.0`) — Cross-platform application, QML/Quick UI, and D-Bus framework.
-- **[KDE Frameworks 6 — Kirigami, Kirigami Addons & Breeze Icons](https://develop.kde.org/frameworks/kirigami/)** (`LGPL-2.1+` / `LGPL-3.0`) — Native Linux desktop UI components and iconography.
-- **[BlueZ](https://www.bluez.org/)** & **Microsoft Winsock2 Bluetooth (`ws2_32` / `bthprops`)** — Native OS Bluetooth RFCOMM stacks on Linux and Windows.
-- **[AppImageKit / appimagetool](https://github.com/AppImage/appimagetool)** (`MIT`) & **[Inno Setup](https://jrsoftware.org/isinfo.php)** — Self-contained Linux AppImage and Windows installer packaging.
+- **[Building & Dependencies](docs/BUILDING.md)** — Distro package commands (Fedora, Debian/Ubuntu, Arch, openSUSE, Void) and CMake build/packaging instructions for Linux & Windows.
+- **[Translations](docs/TRANSLATIONS.md)** — How to switch languages or add a new language via JSON without recompiling.
+- **[Contributing & Adding New Earbuds](CONTRIBUTING.md)** — How to capture a `kalm probe` report for unsupported earbuds, AI coding agents policy, and multi-vendor architecture guide.
+- **[Credits & Acknowledgments](docs/CREDITS.md)** — Contributors, hardware testers, open-source protocol research references, and third-party libraries.
 
 ---
 

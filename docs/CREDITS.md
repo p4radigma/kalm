@@ -10,6 +10,7 @@
 - **[@aboba1414](https://github.com/aboba1414)** — HUAWEI FreeBuds / FreeLace SPP protocol driver, dynamic `SessionCapabilities` UI/tray model, MPRIS wear auto-pause, Kirigami popup delegate fix, hardware verification on *HUAWEI FreeBuds 6i* ([#2](https://github.com/p4radigma/kalm/pull/2)), and AppImage `libselinux` bundling fix ([#3](https://github.com/p4radigma/kalm/pull/3)).
 - **[@Gitveu](https://github.com/Gitveu)** — RFCOMM diagnostics and live hardware testing for *realme Buds T300* on Windows 11 ([#1](https://github.com/p4radigma/kalm/issues/1)).
 - **[@akaremii26](https://github.com/akaremii26)** — RFCOMM diagnostics and feature specification for *CMF Buds 2 Plus* ([#4](https://github.com/p4radigma/kalm/issues/4)).
+- **[@wlroots](https://github.com/wlroots)** — Hardware verification and testing for *CMF Buds 2* ([#5](https://github.com/p4radigma/kalm/issues/5)).
 
 ---
 

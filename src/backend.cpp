@@ -514,7 +514,8 @@ void KalmBackend::scanBluetoothDevices() {
         QVariantList out;
         for (const auto& b : devs) {
             QStringList parts{b.mac};
-            if (b.isHuaweiTws()) parts.append(QStringLiteral("HUAWEI FreeBuds"));
+            if (b.isNothingTws()) parts.append(QStringLiteral("Nothing / CMF"));
+            else if (b.isHuaweiTws()) parts.append(QStringLiteral("HUAWEI FreeBuds"));
             else if (b.isVivoTws()) parts.append(QStringLiteral("vivo/iQOO GAIA"));
             else if (b.isRealmeOppoTws()) parts.append(QStringLiteral("realme/OPPO"));
             parts.append(b.connected ? trKey("status_connected") : trKey("status_paired"));

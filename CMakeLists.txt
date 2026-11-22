@@ -65,6 +65,8 @@ add_library(kalm_core STATIC
     src/huawei.hpp
     src/i18n.cpp
     src/i18n.hpp
+    src/nothing.cpp
+    src/nothing.hpp
     src/probe.cpp
     src/probe.hpp
     src/protocol.cpp

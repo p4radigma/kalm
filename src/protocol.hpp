@@ -17,6 +17,7 @@ inline constexpr const char* kGattServiceUuid = "00001100-d102-11e1-9b23-00025b0
 inline constexpr const char* kRealmeOppoTlUuid = "0000079a-d102-11e1-9b23-00025b00a5a5";
 inline constexpr const char* kOppoHeyMelodyUuid = "db764ac8-4b08-7f25-aafe-59d03c27bae3";
 inline constexpr const char* kOppoHeyMelodyAltUuid = "db764ac8-4b08-7f25-aafe-59d03c27bae4";
+inline constexpr const char* kNothingSppUuid = "aeac4a03-dff5-498f-843a-34487cf133eb";
 inline constexpr const char* kStandardSppUuid = "00001101-0000-1000-8000-00805f9b34fb";
 inline constexpr const char* kAudioSinkUuid = "0000110b-0000-1000-8000-00805f9b34fb";
 
@@ -24,6 +25,7 @@ enum class DeviceProtocol : uint8_t {
     VivoGaia = 0,
     RealmeOppoTl = 1,
     HuaweiSpp = 2,
+    NothingSpp = 3,
 };
 
 inline constexpr uint8_t kPreamble = 0xFF;

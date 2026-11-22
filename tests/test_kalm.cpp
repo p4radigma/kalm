@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "i18n.hpp"
 #include "huawei.hpp"
+#include "nothing.hpp"
 #include "probe.hpp"
 #include "protocol.hpp"
 #include "registry.hpp"
@@ -265,18 +266,117 @@ int main() {
         KALM_CHECK(rmCaps.protocol == DeviceProtocol::RealmeOppoTl);
         KALM_CHECK(!rmCaps.ancLevels && !rmCaps.equalizer && !rmCaps.gameMode && !rmCaps.findDevice && rmCaps.probe);
 
-        // Adversarial stream fuzzing & bounded buffer resync across all 3 decoders
+        // 4c. Nothing / CMF Buds (0x55 SPP) codec, CMF Buds 2 Plus (B184) profile, state & capabilities
+        namespace nt = kalm::nothing;
+        KALM_CHECK(nt::matchesName(QStringLiteral("CMF Buds 2 Plus")));
+        KALM_CHECK(nt::matchesName(QStringLiteral("Nothing Ear (2)")));
+        KALM_CHECK(nt::matchesName(QStringLiteral("Ear (a)")));
+        KALM_CHECK(!nt::matchesName(QStringLiteral("vivo TWS 5 Hi-Fi")));
+
+        const auto cmfProf = nt::profileFor(QStringLiteral("CMF Buds 2 Plus"));
+        KALM_CHECK(cmfProf.useListeningModeEq);
+        KALM_CHECK(!cmfProf.isOverEar);
+        KALM_CHECK(nt::ancLevels(cmfProf).size() == 4);
+        KALM_CHECK(nt::eqPresets(cmfProf).size() == 7);
+
+        // Verify exact wire encoding for ANC write (0xF00F) and Low Latency write (0xF040)
+        const QByteArray ancSetPkt = nt::buildSetAnc(NoiseMode::Anc, nt::kWireAncAdaptive, 1);
+        KALM_CHECK(ancSetPkt.left(11).toHex() == "5560010ff0030001010400");
+        const QByteArray llSetPkt = nt::buildSetLowLatency(false, 2);
+        KALM_CHECK(llSetPkt.left(10).toHex() == "55600140f00200020200");
+        const QByteArray eqSetPkt = nt::buildSetEq(3, cmfProf, 3);  // Pop on CMF Buds 2 Plus (0xF01D)
+        KALM_CHECK(eqSetPkt.left(10).toHex() == "5560011df00200030300");
+
+        nt::Decoder ntDec;
+        EarbudState ntSt;
+        ntSt.protocol = DeviceProtocol::NothingSpp;
+        ntSt.deviceName = QStringLiteral("CMF Buds 2 Plus");
+
+        // Battery response 0x4007: 3 components -> L=80% (0x02, 0x50), R=75%+chg (0x03, 0xCB), Case=90% (0x04, 0x5A)
+        const auto battPkts = ntDec.feed(
+            QByteArray("noise") + nt::encode(nt::kRespBattery, QByteArray::fromHex("03025003cb045a"), 1));
+        KALM_CHECK(battPkts.size() == 1);
+        KALM_CHECK(nt::applyPacket(battPkts.first(), ntSt, cmfProf));
+        KALM_CHECK(ntSt.leftBattery.level == 80 && !ntSt.leftBattery.charging);
+        KALM_CHECK(ntSt.rightBattery.level == 75 && ntSt.rightBattery.charging);
+        KALM_CHECK(ntSt.caseBattery.level == 90 && !ntSt.caseBattery.charging);
+
+        // Firmware 0x4042
+        const auto fwPkts = ntDec.feed(nt::encode(nt::kRespFirmware, QByteArray("1.0.1.54"), 2));
+        KALM_CHECK(fwPkts.size() == 1);
+        KALM_CHECK(nt::applyPacket(fwPkts.first(), ntSt, cmfProf));
+        KALM_CHECK(ntSt.firmware == u"1.0.1.54");
+
+        // Wear status 0x400A: L=inEar(0x04), R=inCase(0x01)
+        const auto wearPkts = ntDec.feed(nt::encode(nt::kRespWearStatus, QByteArray::fromHex("0202040301"), 3));
+        KALM_CHECK(wearPkts.size() == 1);
+        KALM_CHECK(nt::applyPacket(wearPkts.first(), ntSt, cmfProf));
+        KALM_CHECK(ntSt.leftWear == u"worn");
+        KALM_CHECK(ntSt.rightWear == u"in_case");
+
+        // ANC 0x401E -> Adaptive (0x04), then Transparency (0x07), then Off (0x05)
+        const auto ancPkts = ntDec.feed(nt::encode(nt::kRespAnc, QByteArray::fromHex("010400"), 4));
+        KALM_CHECK(ancPkts.size() == 1 && nt::applyPacket(ancPkts.first(), ntSt, cmfProf));
+        KALM_CHECK(ntSt.noiseMode == NoiseMode::Anc && ntSt.noiseEffect == nt::kWireAncAdaptive);
+
+        // Payload-only CRC fallback test (used by some newer CMF firmwares)
+        {
+            QByteArray raw(8 + 3 + 2, '\x00');
+            raw[0] = 0x55;
+            raw[1] = 0x60;
+            raw[2] = 0x01;
+            raw[3] = 0x03;
+            raw[4] = static_cast<char>(0xE0);  // 0xE003 notify ANC
+            raw[5] = 0x03;
+            raw[7] = 0x05;
+            raw[8] = 0x01;
+            raw[9] = 0x07;  // Transparency
+            raw[10] = 0x00;
+            const uint16_t pCrc = nt::crc16Modbus(raw.mid(8, 3));
+            raw[11] = static_cast<char>(pCrc & 0xFF);
+            raw[12] = static_cast<char>((pCrc >> 8) & 0xFF);
+            const auto pOnlyPkts = ntDec.feed(raw);
+            KALM_CHECK(pOnlyPkts.size() == 1 && nt::applyPacket(pOnlyPkts.first(), ntSt, cmfProf));
+            KALM_CHECK(ntSt.noiseMode == NoiseMode::Transparency);
+        }
+
+        // EQ (0x4050 -> Pop=3), Low Latency (0x4041 -> On=1), In-Ear Detection (0x400E -> On)
+        const auto ntEqPkts = ntDec.feed(nt::encode(nt::kRespListeningMode, QByteArray::fromHex("0300"), 6));
+        KALM_CHECK(ntEqPkts.size() == 1 && nt::applyPacket(ntEqPkts.first(), ntSt, cmfProf));
+        KALM_CHECK(ntSt.audioEffect == 3);
+        KALM_CHECK(ntSt.toJson().value(QStringLiteral("protocol")).toString() == u"nothing_spp");
+
+        const auto ntLlPkts = ntDec.feed(nt::encode(nt::kRespLowLatency, QByteArray::fromHex("01"), 7));
+        KALM_CHECK(ntLlPkts.size() == 1 && nt::applyPacket(ntLlPkts.first(), ntSt, cmfProf));
+        KALM_CHECK(ntSt.lowLatency.value_or(false));
+
+        const auto ntInEarPkts = ntDec.feed(nt::encode(nt::kRespInEarDetection, QByteArray::fromHex("010101"), 8));
+        KALM_CHECK(ntInEarPkts.size() == 1 && nt::applyPacket(ntInEarPkts.first(), ntSt, cmfProf));
+        KALM_CHECK(ntSt.wearDetection.value_or(false));
+
+        // Capabilities for CMF Buds 2 Plus
+        capReg.add(QStringLiteral("2C:BE:EE:11:22:33"), QStringLiteral("CMF Buds 2 Plus"), {}, true);
+        KalmSession ntSess(capReg);
+        const auto ntCaps = ntSess.capabilities();
+        KALM_CHECK(ntCaps.protocol == DeviceProtocol::NothingSpp);
+        KALM_CHECK(ntCaps.ancLevels && ntCaps.equalizer && ntCaps.gameMode && ntCaps.wearDetection &&
+                   ntCaps.findDevice && !ntCaps.noiseCycle && ntCaps.probe);
+
+        // Adversarial stream fuzzing & bounded buffer resync across all 4 decoders
         FrameDecoder advVivo;
         RealmeOppoDecoder advRealme;
         hw::Decoder advHw;
+        nt::Decoder advNt;
         const QByteArray poison(200000, '\x5a');
         (void)advVivo.feed(QByteArray::fromHex("ff0402ffff001b8230") + poison);
         (void)advRealme.feed(QByteArray::fromHex("aaff7f00000681") + poison);
         (void)advHw.feed(QByteArray::fromHex("5a1ffb002b2a01ff") + poison);
+        (void)advNt.feed(QByteArray::fromHex("5560010740ff1f01") + poison);
 
         KALM_CHECK(advVivo.feed(buildHandshake()).size() == 1);
         KALM_CHECK(advRealme.feed(buildRealmeOppoPacket(kTlCmdGetBattery, 1, {})).size() == 1);
         KALM_CHECK(advHw.feed(hw::buildQueryAnc()).size() == 1);
+        KALM_CHECK(advNt.feed(nt::buildQueryBattery(1)).size() == 1);
     }
 
     // 5. Heap & Handle/FD Leak Stress Test (10,000 decode/JSON cycles + 1,000 IPC roundtrips)

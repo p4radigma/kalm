@@ -9,7 +9,7 @@ Universal native desktop application and CLI (**C++20 / Qt 6**) for controlling 
 </p>
 
 ## Features
-- **Multi-Brand Protocol Engine**: Auto-detects the connected earbuds' wire protocol (**vivo / iQOO Compact GAIA**, **HUAWEI SPP**, **realme / OPPO / OnePlus Link**) and dynamically adapts the UI and tray menus (`SessionCapabilities`) so only supported controls are shown.
+- **Multi-Brand Protocol Engine**: Auto-detects the connected earbuds' wire protocol (**vivo / iQOO Compact GAIA**, **HUAWEI SPP**, **Nothing / CMF SPP**, **realme / OPPO / OnePlus Link**) and dynamically adapts the UI and tray menus (`SessionCapabilities`) so only supported controls are shown.
 - **Noise Control & ANC Levels**:
   - *Noise Cancelling (ANC)*, *Off*, and *Transparency* modes.
   - Per-model ANC intensity & environment presets (*Adaptive / Dynamic*, *Mild*, *Standard*, *Deep*, *Airplane*, *Metro*, *Bus*) and *Vocal enhancement* transparency where supported.
@@ -41,6 +41,7 @@ Universal native desktop application and CLI (**C++20 / Qt 6**) for controlling 
 | **HUAWEI SPP (`0x5A`, RFCOMM ch. 1)** | **HUAWEI FreeBuds Pro / Pro 2 / Pro 3 / Pro 4**, **FreeBuds 5 / 5i / 4 / SE 2**, **FreeLace / FreeLace Pro 2**, **HUAWEI Eyewear / WATCH Buds** — ANC modes & levels, battery, EQ, Game Mode, auto-pause, and Dual-Connect depending on model capabilities *(ported from GPL-3 [OpenFreebuds](https://github.com/melianmiko/OpenFreebuds))* |
 | **vivo / iQOO GAIA v4 (`0xFF`)** | **vivo TWS 5 / 5 Pro / 5e / 4 / 4 Hi-Fi / 3 / 3 Pro**, **iQOO TWS 5 / 5e / 2 / 1 / 1e**, **vivo / iQOO Headphones** — full ANC, EQ, Game Mode, Multipoint & battery |
 | **vivo / iQOO GAIA v3 (`0xFF`)** | **vivo TWS 3e**, **vivo TWS Air3 Pro**, **iQOO TWS Air3 Pro** — ANC, EQ, Game Mode, Multipoint & battery; non-ANC models (*vivo TWS 5i / 3i / Air3 / Air2*, *iQOO TWS 5i / 1i / Air3*) support battery, EQ & Multipoint |
+| **Nothing / CMF SPP (`0x55`, UUID `aeac4a03-…`)** | **CMF Buds 2 Plus**, **CMF Buds 2 / 2a / Pro 2 / Buds / Buds Pro**, **CMF Neckband Pro / Headphone Pro**, **Nothing Ear (1) / (2) / (a) / (3) / (3a) / (open) / (stick)**, **Nothing Headphone (1)** — ANC modes & levels (*Adaptive / Low / Mid / High*), Transparency, L/R/Case battery & charging, in-ear wear state, EQ presets (*Dirac Opteo / Pop / Rock / Electronic / Vocals / Classical* & classic EQ), Low-Lag Game Mode, In-Ear Detection, Find My Earbuds & firmware *(awaiting live hardware verification on CMF Buds 2 Plus — [#4](https://github.com/p4radigma/kalm/issues/4))* |
 | **realme / OPPO / OnePlus (`0xAA`)** | **realme Buds** (*Air / T-series*), **OPPO Enco**, and **OnePlus Buds** models using the `0xAA` RFCOMM link protocol — ANC / Transparency / Off switching, battery & firmware *(EQ, Game Mode & Multipoint planned)* |
 
 *Using different wireless earbuds? Run `kalm probe` and follow the [New Earbuds Guide](CONTRIBUTING.md#requesting-support-for-new-earbuds)!*

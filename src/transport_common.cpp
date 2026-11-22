@@ -3,6 +3,7 @@
 
 #include "huawei.hpp"
 #include "i18n.hpp"
+#include "nothing.hpp"
 #include "protocol.hpp"
 
 #include <QElapsedTimer>
@@ -70,6 +71,34 @@ std::optional<RfcommConnection> verifyHuaweiSocket(UniqueSocket sock, int waitMs
     return std::nullopt;
 }
 
+std::optional<RfcommConnection> verifyNothingSocket(UniqueSocket sock, int waitMs) {
+    if (!sock) return std::nullopt;
+    // Send protocol activate (0xC001) + battery query (0xC007)
+    if (!sendAll(sock.get(), nothing::buildProtocolActivate(1))) {
+        return std::nullopt;
+    }
+    (void)sendAll(sock.get(), nothing::buildQueryBattery(2));
+
+    nothing::Decoder decoder;
+    QByteArray collected;
+    QElapsedTimer timer;
+    timer.start();
+    char buf[1024];
+    while (timer.elapsed() < waitMs) {
+        const int rem = std::max(50, static_cast<int>(waitMs - timer.elapsed()));
+        const int pr = pollSocketRead(sock.get(), rem);
+        if (pr <= 0) break;
+        const qint64 n = recvSocket(sock.get(), buf, sizeof(buf));
+        if (n <= 0) break;
+        const QByteArray chunk(buf, static_cast<qsizetype>(n));
+        collected.append(chunk);
+        if (!decoder.feed(chunk).isEmpty()) {
+            return RfcommConnection{std::move(sock), collected, DeviceProtocol::NothingSpp};
+        }
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 bool BluezDevice::isVivoTws() const {
@@ -100,6 +129,15 @@ bool BluezDevice::isRealmeOppoTws() const {
 
 bool BluezDevice::isHuaweiTws() const {
     return huawei::matchesName(name);
+}
+
+bool BluezDevice::isNothingTws() const {
+    for (const QString& u : uuids) {
+        if (u.compare(QLatin1String(kNothingSppUuid), Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+    return nothing::matchesName(name);
 }
 
 bool BluezDevice::isAudioDevice() const {
@@ -210,6 +248,41 @@ RfcommConnection openHuaweiRfcomm(const QString& mac,
     throw std::runtime_error(trKey("err_huawei_open").arg(title).toStdString());
 }
 
+RfcommConnection openNothingRfcomm(const QString& mac,
+                                   const QString& devPath,
+                                   const QString& name,
+                                   const QStringList& uuids,
+                                   int timeoutMs) {
+    const QString normMac = mac.trimmed().toUpper();
+    const int perTry = std::min(timeoutMs, 1800);
+
+    bool hasNothingUuid = uuids.isEmpty();
+    for (const QString& u : uuids) {
+        if (u.compare(QLatin1String(kNothingSppUuid), Qt::CaseInsensitive) == 0) {
+            hasNothingUuid = true;
+            break;
+        }
+    }
+
+    if (hasNothingUuid) {
+        if (auto res = verifyNothingSocket(
+                openRfcommByUuid(normMac, devPath, QString::fromLatin1(kNothingSppUuid), perTry),
+                perTry)) {
+            return std::move(*res);
+        }
+    }
+
+    // Fallback direct channels: 15 (Nothing Ear), 16 (CMF Buds 2 / 2 Plus), 28 (CMF Headphone Pro)
+    for (int channel : {15, 16, 28}) {
+        if (auto res = verifyNothingSocket(openRfcommByChannel(normMac, channel, perTry), perTry)) {
+            return std::move(*res);
+        }
+    }
+
+    const QString title = name.isEmpty() ? normMac : QStringLiteral("%1 (%2)").arg(name, normMac);
+    throw std::runtime_error(trKey("err_nothing_open").arg(title).toStdString());
+}
+
 RfcommConnection openEarbudRfcomm(const QString& mac,
                                   const QString& devPath,
                                   const QString& name,
@@ -219,6 +292,7 @@ RfcommConnection openEarbudRfcomm(const QString& mac,
     const QString lowName = name.toLower();
 
     const bool isExplicitHuawei = huawei::matchesName(name);
+    bool isExplicitNothing = nothing::matchesName(name);
     bool isExplicitVivo = lowName.contains(u"vivo") || lowName.contains(u"iqoo");
     bool isExplicitRealme = lowName.contains(u"realme") || lowName.contains(u"oppo") || lowName.contains(u"oneplus");
     for (const QString& u : uuids) {
@@ -229,7 +303,13 @@ RfcommConnection openEarbudRfcomm(const QString& mac,
                    low == QLatin1String(kOppoHeyMelodyUuid) ||
                    low == QLatin1String(kOppoHeyMelodyAltUuid)) {
             isExplicitRealme = true;
+        } else if (low == QLatin1String(kNothingSppUuid)) {
+            isExplicitNothing = true;
         }
+    }
+
+    if (isExplicitNothing && !isExplicitVivo && !isExplicitRealme && !isExplicitHuawei) {
+        return openNothingRfcomm(normMac, devPath, name, uuids, timeoutMs);
     }
 
     if (isExplicitHuawei && !isExplicitVivo && !isExplicitRealme) {
@@ -252,6 +332,10 @@ RfcommConnection openEarbudRfcomm(const QString& mac,
         return openGaiaRfcomm(normMac, devPath, name, timeoutMs);
     } catch (...) {
         if (auto res = tryOpenRealmeOppoRfcomm(normMac, devPath, uuids, timeoutMs)) {
+            return std::move(*res);
+        }
+        if (auto res = verifyNothingSocket(
+                openRfcommByUuid(normMac, devPath, QString::fromLatin1(kNothingSppUuid), 1500), 1500)) {
             return std::move(*res);
         }
         if (auto res = verifyHuaweiSocket(openRfcommByChannel(normMac, 1, 1200), 1200)) {

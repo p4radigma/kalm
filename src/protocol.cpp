@@ -3,6 +3,7 @@
 
 #include "huawei.hpp"
 #include "i18n.hpp"
+#include "nothing.hpp"
 
 #include <QDir>
 #include <QFile>
@@ -349,14 +350,23 @@ QJsonObject EarbudState::toJson() const {
         });
     }
 
+    QString ancLbl;
+    if (noiseEffect) {
+        ancLbl = (protocol == DeviceProtocol::NothingSpp)
+                     ? nothing::ancLevelLabel(*noiseEffect)
+                     : ancLevelLabel(*noiseEffect);
+    }
+
     QString fullModeLabel;
     if (noiseMode) {
         fullModeLabel = noiseModeLabel(*noiseMode);
-        if (protocol == DeviceProtocol::VivoGaia || protocol == DeviceProtocol::HuaweiSpp) {
-            if (*noiseMode == NoiseMode::Anc && noiseEffect) {
-                const QString sub = ancLevelLabel(*noiseEffect);
-                if (!sub.isEmpty()) fullModeLabel += QStringLiteral(" (%1)").arg(sub);
-            } else if (*noiseMode == NoiseMode::Transparency && transparencyEffect) {
+        if (protocol == DeviceProtocol::VivoGaia ||
+            protocol == DeviceProtocol::HuaweiSpp ||
+            protocol == DeviceProtocol::NothingSpp) {
+            if (*noiseMode == NoiseMode::Anc && !ancLbl.isEmpty()) {
+                fullModeLabel += QStringLiteral(" (%1)").arg(ancLbl);
+            } else if (*noiseMode == NoiseMode::Transparency && transparencyEffect &&
+                       protocol != DeviceProtocol::NothingSpp) {
                 const QString sub = transparencyLabel(*transparencyEffect);
                 if (!sub.isEmpty()) fullModeLabel += QStringLiteral(" (%1)").arg(sub);
             }
@@ -366,6 +376,18 @@ QJsonObject EarbudState::toJson() const {
     QString protoStr = QStringLiteral("vivo_gaia");
     if (protocol == DeviceProtocol::RealmeOppoTl) protoStr = QStringLiteral("realme_tl");
     else if (protocol == DeviceProtocol::HuaweiSpp) protoStr = QStringLiteral("huawei_spp");
+    else if (protocol == DeviceProtocol::NothingSpp) protoStr = QStringLiteral("nothing_spp");
+
+    QString eqLbl;
+    if (audioEffect) {
+        if (protocol == DeviceProtocol::HuaweiSpp) {
+            eqLbl = huawei::eqPresetLabel(*audioEffect);
+        } else if (protocol == DeviceProtocol::NothingSpp) {
+            eqLbl = nothing::eqPresetLabel(*audioEffect, nothing::profileFor(deviceName));
+        } else {
+            eqLbl = audioEffectLabel(*audioEffect);
+        }
+    }
 
     return QJsonObject{
         {QStringLiteral("connected"), connected},
@@ -377,18 +399,14 @@ QJsonObject EarbudState::toJson() const {
         {QStringLiteral("noise_mode_label"), fullModeLabel.isEmpty() ? QJsonValue() : QJsonValue(fullModeLabel)},
         {QStringLiteral("anc_level"), optInt(noiseEffect)},
         {QStringLiteral("anc_level_slug"), noiseEffect ? QJsonValue(ancLevelSlug(*noiseEffect)) : QJsonValue()},
-        {QStringLiteral("anc_level_label"), noiseEffect ? QJsonValue(ancLevelLabel(*noiseEffect)) : QJsonValue()},
+        {QStringLiteral("anc_level_label"), ancLbl.isEmpty() ? QJsonValue() : QJsonValue(ancLbl)},
         {QStringLiteral("transparency_effect"), optInt(transparencyEffect)},
         {QStringLiteral("transparency_effect_slug"), transparencyEffect ? QJsonValue(transparencySlug(*transparencyEffect)) : QJsonValue()},
         {QStringLiteral("transparency_effect_label"), transparencyEffect ? QJsonValue(transparencyLabel(*transparencyEffect)) : QJsonValue()},
         {QStringLiteral("battery"), batt},
         {QStringLiteral("wear"), wear},
         {QStringLiteral("audio_effect"), optInt(audioEffect)},
-        {QStringLiteral("audio_effect_label"),
-         audioEffect ? QJsonValue(protocol == DeviceProtocol::HuaweiSpp
-                                      ? huawei::eqPresetLabel(*audioEffect)
-                                      : audioEffectLabel(*audioEffect))
-                     : QJsonValue()},
+        {QStringLiteral("audio_effect_label"), eqLbl.isEmpty() ? QJsonValue() : QJsonValue(eqLbl)},
         {QStringLiteral("low_latency"), optBool(lowLatency)},
         {QStringLiteral("noise_cycle"), nc},
         {QStringLiteral("paired_devices"), devs},

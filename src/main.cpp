@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "backend.hpp"
 #include "i18n.hpp"
+#include "nothing.hpp"
 #include "probe.hpp"
 #include "protocol.hpp"
 #include "registry.hpp"
@@ -109,7 +110,8 @@ void printStatusHuman(const QJsonObject& data) {
     const QString fw = data.value(QStringLiteral("firmware")).toString(QStringLiteral("—"));
 
     const QString protoStr = data.value(QStringLiteral("protocol")).toString(QStringLiteral("vivo_gaia"));
-    const bool hasSubModes = (protoStr == u"vivo_gaia" || protoStr == u"huawei_spp");
+    const bool hasSubModes =
+        (protoStr == u"vivo_gaia" || protoStr == u"huawei_spp" || protoStr == u"nothing_spp");
     QString mode = QStringLiteral("—");
     if (auto nm = kalm::parseNoiseModeStr(data.value(QStringLiteral("noise_mode")).toString())) {
         mode = kalm::noiseModeLabel(*nm);
@@ -204,17 +206,25 @@ QString battSummaryShort(const QJsonObject& data) {
     return parts.join(QStringLiteral(" · "));
 }
 
-bool isHuaweiCliTarget(kalm::DeviceRegistry& reg, const QString& query) {
+QString resolveCliTargetName(kalm::DeviceRegistry& reg, const QString& query) {
     if (!query.trimmed().isEmpty()) {
         if (auto resolved = reg.resolveQuery(query)) {
-            return kalm::huawei::matchesName(resolved->name);
+            return resolved->name;
         }
-        return false;
+        return {};
     }
     if (auto active = reg.getActive()) {
-        return kalm::huawei::matchesName(active->name);
+        return active->name;
     }
-    return false;
+    return {};
+}
+
+bool isHuaweiCliTarget(kalm::DeviceRegistry& reg, const QString& query) {
+    return kalm::huawei::matchesName(resolveCliTargetName(reg, query));
+}
+
+bool isNothingCliTarget(kalm::DeviceRegistry& reg, const QString& query) {
+    return kalm::nothing::matchesName(resolveCliTargetName(reg, query));
 }
 
 std::optional<int> parseEqPreset(const QString& raw) {
@@ -417,9 +427,10 @@ int handleDevicesSubcmd(const QStringList& rest) {
         for (const auto& s : reg.devices()) saved.insert(s.mac);
         out << kalm::trKey("cli_bt_header") << "\n";
         for (const auto& b : found) {
-            const QString tag = b.isHuaweiTws() ? QStringLiteral("HUAWEI FreeBuds")
+            const QString tag = b.isNothingTws() ? QStringLiteral("Nothing / CMF")
+                              : (b.isHuaweiTws() ? QStringLiteral("HUAWEI FreeBuds")
                               : (b.isVivoTws() ? QStringLiteral("vivo/iQOO GAIA")
-                              : (b.isRealmeOppoTws() ? QStringLiteral("realme/OPPO") : QStringLiteral("Bluetooth Audio")));
+                              : (b.isRealmeOppoTws() ? QStringLiteral("realme/OPPO") : QStringLiteral("Bluetooth Audio"))));
             const QString conn = b.connected ? kalm::trKey("status_connected") : kalm::trKey("status_disconnected");
             const QString sv = saved.contains(b.mac) ? QStringLiteral(" [%1]").arg(kalm::trKey("status_in_list")) : QString{};
             out << "  • " << b.name << " — " << b.mac << " (" << tag << ", " << conn << ")" << sv << "\n";
@@ -652,6 +663,17 @@ int main(int argc, char** argv) {
                                 .arg(extra)
                                 .toStdString());
                     }
+                    if (isNothingCliTarget(reg, deviceQuery)) {
+                        switch (*ancLvl) {
+                            case 3: ancLvl = kalm::nothing::kWireAncAdaptive; break;
+                            case 1: ancLvl = kalm::nothing::kWireAncLow; break;
+                            case 0: ancLvl = kalm::nothing::kWireAncMid; break;
+                            case 2: ancLvl = kalm::nothing::kWireAncHigh; break;
+                            default:
+                                throw std::runtime_error(
+                                    "This ANC level is not available on Nothing / CMF earbuds (use adaptive, mild, standard, deep).");
+                        }
+                    }
                 } else if (*mode == kalm::NoiseMode::Transparency) {
                     transEff = kalm::parseTransparencyStr(extra);
                     if (!transEff) {
@@ -729,29 +751,51 @@ int main(int argc, char** argv) {
 
         if (subcmd == u"eq") {
             if (positional.size() < 2) {
-                throw std::runtime_error("Usage: kalm eq <standard|vocal|bass|treble|audiobook|master>");
-            }
-            const auto eff = parseEqPreset(positional[1]);
-            if (!eff) {
-                throw std::runtime_error(
-                    QStringLiteral("Unknown preset '%1'. Available: standard, vocal, bass, treble, audiobook, master")
-                        .arg(positional[1])
-                        .toStdString());
+                throw std::runtime_error("Usage: kalm eq <standard|vocal|bass|treble|audiobook|master|pop|rock|electronic|classical|custom>");
             }
 
-            // vivo GAIA and HUAWEI SPP use different preset ids for the same
-            // sound profile; translate the CLI slug for HUAWEI devices.
-            int targetCode = *eff;
-            const char* labelKey = nullptr;
-            if (isHuaweiCliTarget(reg, deviceQuery)) {
-                switch (*eff) {
-                    case 0: targetCode = 1; labelKey = "eq_standard"; break;
-                    case 1: targetCode = 9; labelKey = "eq_vocal"; break;
-                    case 2: targetCode = 2; labelKey = "eq_bass"; break;
-                    case 3: targetCode = 3; labelKey = "eq_treble"; break;
-                    default:
-                        throw std::runtime_error(
-                            "This sound preset is not available on HUAWEI earbuds.");
+            int targetCode = 0;
+            QString targetLabel;
+            if (isNothingCliTarget(reg, deviceQuery)) {
+                const auto nProf = kalm::nothing::profileFor(resolveCliTargetName(reg, deviceQuery));
+                const QString k = positional[1].trimmed().toLower();
+                bool matched = false;
+                for (const auto& entry : kalm::nothing::eqPresets(nProf)) {
+                    if (k == QLatin1String(entry.slug) || k == QString::number(entry.code) ||
+                        (k == u"balanced" && QLatin1String(entry.slug) == u"standard") ||
+                        (k == u"dirac" && QLatin1String(entry.slug) == u"standard") ||
+                        (k == u"voice" && QLatin1String(entry.slug) == u"vocal")) {
+                        targetCode = entry.code;
+                        targetLabel = kalm::trKey(entry.trKeyName);
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) {
+                    throw std::runtime_error(
+                        QStringLiteral("Unknown Nothing/CMF EQ preset '%1'.").arg(positional[1]).toStdString());
+                }
+            } else {
+                const auto eff = parseEqPreset(positional[1]);
+                if (!eff) {
+                    throw std::runtime_error(
+                        QStringLiteral("Unknown preset '%1'. Available: standard, vocal, bass, treble, audiobook, master")
+                            .arg(positional[1])
+                            .toStdString());
+                }
+                targetCode = *eff;
+                if (isHuaweiCliTarget(reg, deviceQuery)) {
+                    switch (*eff) {
+                        case 0: targetCode = 1; targetLabel = kalm::trKey("eq_standard"); break;
+                        case 1: targetCode = 9; targetLabel = kalm::trKey("eq_vocal"); break;
+                        case 2: targetCode = 2; targetLabel = kalm::trKey("eq_bass"); break;
+                        case 3: targetCode = 3; targetLabel = kalm::trKey("eq_treble"); break;
+                        default:
+                            throw std::runtime_error(
+                                "This sound preset is not available on HUAWEI earbuds.");
+                    }
+                } else {
+                    targetLabel = kalm::audioEffectLabel(*eff);
                 }
             }
 
@@ -762,8 +806,7 @@ int main(int argc, char** argv) {
             if (!ipc || !ipc->value(QStringLiteral("ok")).toBool()) {
                 kalm::oneshotSetEq(reg, targetCode, deviceQuery);
             }
-            out << kalm::trKey("cli_sound") << " "
-                << (labelKey ? kalm::trKey(labelKey) : kalm::audioEffectLabel(*eff)) << "\n";
+            out << kalm::trKey("cli_sound") << " " << targetLabel << "\n";
             return 0;
         }
 

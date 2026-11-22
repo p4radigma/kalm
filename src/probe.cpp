@@ -2,6 +2,7 @@
 #include "probe.hpp"
 
 #include "huawei.hpp"
+#include "nothing.hpp"
 #include "protocol.hpp"
 #include "transport.hpp"
 
@@ -46,7 +47,8 @@ QStringList buildCandidateControlUuids(const QStringList& devUuids) {
         } else if (low == QLatin1String(kVivoGaiaUuid) ||
                    low == QLatin1String(kRealmeOppoTlUuid) ||
                    low == QLatin1String(kOppoHeyMelodyUuid) ||
-                   low == QLatin1String(kOppoHeyMelodyAltUuid)) {
+                   low == QLatin1String(kOppoHeyMelodyAltUuid) ||
+                   low == QLatin1String(kNothingSppUuid)) {
             if (!prioritized.contains(low)) prioritized.append(low);
         } else if (low != QLatin1String(kGattServiceUuid)) {
             if (!customOthers.contains(low)) customOthers.append(low);
@@ -366,6 +368,64 @@ bool runHuaweiSppProbe(SocketHandle fd, QTextStream& out) {
     return true;
 }
 
+bool runNothingSppProbe(SocketHandle fd, QTextStream& out) {
+    auto formatNothing = [](const nothing::Packet& p) -> QString {
+        if (p.command == nothing::kRespDeviceConfig) {
+            return QStringLiteral("cmd=0x4006 (serial/address redacted, len=%1)").arg(p.payload.size());
+        }
+        return QStringLiteral("cmd=0x%1 op=%2 payload=[%3]")
+            .arg(p.command, 4, 16, QLatin1Char('0'))
+            .arg(p.opId)
+            .arg(hexSpaced(p.payload));
+    };
+
+    if (!sendAll(fd, nothing::buildProtocolActivate(1))) return false;
+    nothing::Decoder dec;
+    QByteArray firstRx = drainRawBytes(fd, 400);
+    auto firstPkts = dec.feed(firstRx);
+    if (firstPkts.isEmpty()) {
+        sendAll(fd, nothing::buildQueryBattery(2));
+        firstRx = drainRawBytes(fd, 400);
+        firstPkts = dec.feed(firstRx);
+    }
+    if (firstPkts.isEmpty()) return false;
+
+    out << "\n### Nothing / CMF SPP (`0x55` Protocol) Probe\n";
+    for (const auto& p : firstPkts) {
+        out << "- Initial reply: `" << formatNothing(p) << "`\n";
+    }
+
+    struct NothingSpec {
+        const char* label;
+        uint16_t cmd;
+        QByteArray payload;
+    };
+    const std::vector<NothingSpec> specs = {
+        {"Firmware (`0xC042`)", nothing::kCmdReadFirmware, {}},
+        {"Battery (`0xC007`)", nothing::kCmdReadBattery, {}},
+        {"Wear Status (`0xC00A`)", nothing::kCmdReadWearStatus, {}},
+        {"ANC Mode (`0xC01E`)", nothing::kCmdReadAnc, {}},
+        {"ANC Mode (`0xC01E [03]`)", nothing::kCmdReadAnc, QByteArray("\x03", 1)},
+        {"Dirac/Listening EQ (`0xC050`)", nothing::kCmdReadListeningMode, {}},
+        {"Classic EQ (`0xC01F`)", nothing::kCmdReadEq, {}},
+        {"Low Latency (`0xC041`)", nothing::kCmdReadLowLatency, {}},
+        {"In-Ear Detection (`0xC00E`)", nothing::kCmdReadInEarDetection, {}},
+    };
+    uint8_t op = 3;
+    for (const auto& sp : specs) {
+        sendAll(fd, nothing::encode(sp.cmd, sp.payload, op++));
+        const auto pkts = dec.feed(drainRawBytes(fd, 260));
+        if (pkts.isEmpty()) {
+            out << "  - " << sp.label << ": *(no reply)*\n";
+        } else {
+            QStringList items;
+            for (const auto& p : pkts) items.append(formatNothing(p));
+            out << "  - " << sp.label << ": `" << items.join(QStringLiteral(" | ")) << "`\n";
+        }
+    }
+    return true;
+}
+
 bool runAirohaRaceProbe(SocketHandle fd, QTextStream& out) {
     // Airoha RACE read-only battery query: 05 5A 03 00 D6 0C 00
     const QByteArray raceBatt = QByteArray::fromHex("055a0300d60c00");
@@ -493,31 +553,41 @@ QString generateDiagnosticReport(DeviceRegistry& registry,
     // 2. Choose probe order based on advertised UUIDs / brand name
     const QString lowName = dev.name.toLower();
     const bool looksLikeHuawei = dev.isHuaweiTws();
+    const bool looksLikeNothing = dev.isNothingTws();
     const bool looksLikeOppoRealme =
         candUuids.contains(QLatin1String(kRealmeOppoTlUuid)) ||
         candUuids.contains(QLatin1String(kOppoHeyMelodyUuid)) ||
         lowName.contains(u"realme") || lowName.contains(u"oppo") || lowName.contains(u"oneplus");
 
     bool matchedAny = false;
-    if (looksLikeHuawei) {
+    if (looksLikeNothing) {
+        matchedAny = runNothingSppProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runVivoGaiaProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runRealmeOppoProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runHuaweiSppProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runAirohaRaceProbe(sock.get(), out);
+    } else if (looksLikeHuawei) {
         matchedAny = runHuaweiSppProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runVivoGaiaProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runRealmeOppoProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runNothingSppProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runAirohaRaceProbe(sock.get(), out);
     } else if (looksLikeOppoRealme) {
         matchedAny = runRealmeOppoProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runVivoGaiaProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runNothingSppProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runHuaweiSppProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runAirohaRaceProbe(sock.get(), out);
     } else {
         matchedAny = runVivoGaiaProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runRealmeOppoProbe(sock.get(), out);
+        if (!matchedAny) matchedAny = runNothingSppProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runHuaweiSppProbe(sock.get(), out);
         if (!matchedAny) matchedAny = runAirohaRaceProbe(sock.get(), out);
     }
 
     if (!matchedAny) {
-        out << "- **Auto-Probe:** Channel is open, but did not respond to Vivo GAIA (`0xFF`), OPPO/realme (`0xAA`), HUAWEI SPP (`0x5A`), or Airoha RACE (`0x05 0x5A`). Run `kalm probe --listen 15` while toggling ANC on the earbuds to capture raw frames!\n";
+        out << "- **Auto-Probe:** Channel is open, but did not respond to Vivo GAIA (`0xFF`), OPPO/realme (`0xAA`), HUAWEI SPP (`0x5A`), Nothing/CMF (`0x55`), or Airoha RACE (`0x05 0x5A`). Run `kalm probe --listen 15` while toggling ANC on the earbuds to capture raw frames!\n";
     }
 
     // 3. Universal Live Event Listener (--listen <sec>)
@@ -525,6 +595,7 @@ QString generateDiagnosticReport(DeviceRegistry& registry,
         out << "\n### Live Event Capture (" << listenSeconds << "s)\n";
         FrameDecoder vivoDec;
         huawei::Decoder hwDec;
+        nothing::Decoder nothingDec;
         QElapsedTimer listenTimer;
         listenTimer.start();
         const qint64 totalMs = static_cast<qint64>(listenSeconds) * 1000;
@@ -535,6 +606,21 @@ QString generateDiagnosticReport(DeviceRegistry& registry,
             if (chunk.isEmpty()) continue;
 
             const double sec = static_cast<double>(listenTimer.elapsed()) / 1000.0;
+            const auto nothingPackets = nothingDec.feed(chunk);
+            if (!nothingPackets.isEmpty()) {
+                for (const auto& p : nothingPackets) {
+                    ++capturedCount;
+                    if (p.command == nothing::kRespDeviceConfig) {
+                        out << "- `[+" << QString::number(sec, 'f', 1) << "s]` Nothing/CMF: `cmd=0x4006 (redacted)`\n";
+                    } else {
+                        out << "- `[+" << QString::number(sec, 'f', 1) << "s]` Nothing/CMF: `cmd=0x"
+                            << QStringLiteral("%1").arg(p.command, 4, 16, QLatin1Char('0'))
+                            << " payload=[" << hexSpaced(p.payload) << "]`\n";
+                    }
+                }
+                continue;
+            }
+
             const auto hwPackets = hwDec.feed(chunk);
             if (!hwPackets.isEmpty()) {
                 for (const auto& p : hwPackets) {

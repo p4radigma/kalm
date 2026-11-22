@@ -43,6 +43,7 @@ Use the repository Issue Templates:
 - **Protocol codecs & state mapping**:
   - `src/protocol.*` — vivo Compact GAIA (`0xFF`) & realme / OPPO / OnePlus Link (`0xAA`).
   - `src/huawei.*` — HUAWEI FreeBuds / FreeLace SPP (`0x5A`, CRC16-XMODEM).
+  - `src/nothing.*` — Nothing Ear / CMF Buds SPP (`0x55`, CRC16-MODBUS).
   - Add new vendor codecs in a dedicated `src/<vendor>.{hpp,cpp}` module with unit tests in `tests/test_kalm.cpp`.
 - **Transport & auto-detection**:
   - Add UUID / Bluetooth name detection and RFCOMM channel handshake in `src/transport_common.cpp` (`openEarbudRfcomm`) and read-only probing in `src/probe.cpp`.

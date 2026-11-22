@@ -84,7 +84,8 @@ struct BluezDevice {
     bool isVivoTws() const;
     bool isRealmeOppoTws() const;
     bool isHuaweiTws() const;
-    bool isSupportedTws() const { return isVivoTws() || isRealmeOppoTws() || isHuaweiTws(); }
+    bool isNothingTws() const;
+    bool isSupportedTws() const { return isVivoTws() || isRealmeOppoTws() || isHuaweiTws() || isNothingTws(); }
     bool isAudioDevice() const;
 };
 
@@ -128,7 +129,15 @@ RfcommConnection openHuaweiRfcomm(const QString& mac,
                                   const QStringList& uuids = {},
                                   int timeoutMs = 2500);
 
-// Auto-negotiates Vivo GAIA, realme/OPPO/OnePlus TL, or HUAWEI SPP protocol for the target earbuds.
+// Opens an RFCOMM socket to a Nothing Ear / CMF Buds device (UUID aeac4a03-... or channels 15/16/28)
+// and verifies it with the 0x55 protocol handshake/battery query.
+RfcommConnection openNothingRfcomm(const QString& mac,
+                                   const QString& devPath = {},
+                                   const QString& name = {},
+                                   const QStringList& uuids = {},
+                                   int timeoutMs = 2500);
+
+// Auto-negotiates Vivo GAIA, realme/OPPO/OnePlus TL, HUAWEI SPP, or Nothing/CMF SPP protocol.
 RfcommConnection openEarbudRfcomm(const QString& mac,
                                   const QString& devPath = {},
                                   const QString& name = {},

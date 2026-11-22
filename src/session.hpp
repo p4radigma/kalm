@@ -2,6 +2,7 @@
 #pragma once
 
 #include "huawei.hpp"
+#include "nothing.hpp"
 #include "protocol.hpp"
 #include "registry.hpp"
 #include "transport.hpp"
@@ -116,10 +117,20 @@ private:
         huawei::Packet result;
     };
 
+    struct NothingWaiter {
+        std::function<bool(const nothing::Packet&)> pred;
+        QMutex mtx;
+        QWaitCondition cv;
+        bool done = false;
+        bool aborted = false;
+        nothing::Packet result;
+    };
+
     void runLoop();
     void handleFrames(const QList<Frame>& frames);
     bool handleRealmeFrames(const QList<RealmeOppoFrame>& frames);
     void handleHuaweiPackets(const QList<huawei::Packet>& packets);
+    void handleNothingPackets(const QList<nothing::Packet>& packets);
     void updateProtocolHint(const QString& rawName, const QStringList& uuids = {});
     void closeSocket(bool resetIdentity = false);
     bool sendRaw(const QByteArray& data);
@@ -132,6 +143,10 @@ private:
     std::optional<huawei::Packet> sendAndWaitHuawei(const QList<QByteArray>& packets,
                                                     std::function<bool(const huawei::Packet&)> pred,
                                                     int timeoutMs = 1800);
+    std::optional<nothing::Packet> sendAndWaitNothing(const QByteArray& packet,
+                                                      std::function<bool(const nothing::Packet&)> pred,
+                                                      int timeoutMs = 1800);
+    uint8_t nextNothingOpId();
     bool huaweiApply(const QByteArray& setPacket,
                      const QByteArray& ackCommand,
                      std::function<bool(const huawei::Packet&)> isTarget,
@@ -155,6 +170,8 @@ private:
     QString m_modelName;
     WireProfile m_profile;
     huawei::ModelProfile m_hwProfile;
+    nothing::ModelProfile m_nothingProfile;
+    std::atomic<uint8_t> m_nothingOpId{1};
     QMap<int, MultiConnectDevice> m_hwDcRows;
     int m_hwDcCount = 0;
     bool m_mprisPausedByWear = false;
@@ -172,6 +189,7 @@ private:
     QList<std::shared_ptr<Waiter>> m_waiters;
     QList<std::shared_ptr<RealmeWaiter>> m_realmeWaiters;
     QList<std::shared_ptr<HuaweiWaiter>> m_hwWaiters;
+    QList<std::shared_ptr<NothingWaiter>> m_nothingWaiters;
 };
 
 class IpcServer {

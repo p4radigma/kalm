@@ -287,6 +287,16 @@ int main() {
         const QByteArray eqSetPkt = nt::buildSetEq(3, cmfProf, 3);  // Pop on CMF Buds 2 Plus (0xF01D)
         KALM_CHECK(eqSetPkt.left(10).toHex() == "5560011df00200030300");
 
+        // Verify Find My Earbuds ring payloads: Left=0x02, Right=0x03, Ear(1) legacy=[0x01]
+        const auto ringPkts = nt::buildSetRingBuds(true, cmfProf, 4);
+        KALM_CHECK(ringPkts.size() == 2);
+        KALM_CHECK(ringPkts[0].left(10).toHex() == "55600102f00200040201");
+        KALM_CHECK(ringPkts[1].left(10).toHex() == "55600102f00200050301");
+        const auto ear1Prof = nt::profileFor(QStringLiteral("Nothing Ear (1)"));
+        const auto ear1RingPkts = nt::buildSetRingBuds(true, ear1Prof, 6);
+        KALM_CHECK(ear1RingPkts.size() == 1);
+        KALM_CHECK(ear1RingPkts[0].left(9).toHex() == "55600102f001000601");
+
         nt::Decoder ntDec;
         EarbudState ntSt;
         ntSt.protocol = DeviceProtocol::NothingSpp;

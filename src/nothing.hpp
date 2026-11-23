@@ -106,6 +106,7 @@ struct ModelProfile {
     bool useListeningModeEq = false;  // Dirac Opteo / Listening mode (CMF Buds 2 / 2 Plus / 2a / Pro 2, Ear 3)
     bool isBuds2a = false;            // CMF Buds 2a uses 0x07 for default balanced preset
     bool isOverEar = false;           // Headphone (1) / CMF Headphone Pro single battery & ring byte 0x06
+    bool isLegacyRing = false;        // Nothing Ear (1) uses 1-byte ring payload [0x01/0x00]
     bool equalizer = true;
     bool lowLatency = true;
     bool inEarDetection = true;
@@ -135,6 +136,7 @@ QByteArray buildQueryLowLatency(uint8_t opId = 1);
 QByteArray buildSetLowLatency(bool enabled, uint8_t opId = 1);
 QByteArray buildQueryInEarDetection(uint8_t opId = 1);
 QByteArray buildSetInEarDetection(bool enabled, uint8_t opId = 1);
+QByteArray buildSetRingBud(uint8_t budId, bool ring, uint8_t opId = 1);
 QList<QByteArray> buildSetRingBuds(bool ring, const ModelProfile& profile, uint8_t opId = 1);
 
 // ---- Incoming packets ------------------------------------------------------

@@ -81,6 +81,16 @@ const ModelProfile& openEarNoAncProfile() {
     return kProfile;
 }
 
+const ModelProfile& ear1LegacyProfile() {
+    static const ModelProfile kProfile = [] {
+        ModelProfile p;
+        p.label = QStringLiteral("Nothing Ear (1)");
+        p.isLegacyRing = true;
+        return p;
+    }();
+    return kProfile;
+}
+
 uint8_t wireAncByte(NoiseMode mode, std::optional<int> ancLevel) {
     if (mode == NoiseMode::Off) return kWireOff;
     if (mode == NoiseMode::Transparency) return kWireTransparency;
@@ -210,6 +220,7 @@ const ModelProfile& profileFor(const QString& deviceName) {
     if (low.contains(u"buds 2 plus")) return cmfBuds2PlusProfile();
     if (low.contains(u"buds 2a")) return cmfBuds2aProfile();
     if (low.contains(u"headphone")) return overEarProfile();
+    if (low.contains(u"ear (1)")) return ear1LegacyProfile();
     if (low.contains(u"ear (open)") || low.contains(u"ear (stick)") || low.contains(u"clip")) {
         return openEarNoAncProfile();
     }
@@ -342,23 +353,29 @@ QByteArray buildSetInEarDetection(bool enabled, uint8_t opId) {
     return encode(kCmdWriteInEarDetection, payload, opId);
 }
 
-QList<QByteArray> buildSetRingBuds(bool ring, const ModelProfile& profile, uint8_t opId) {
+QByteArray buildSetRingBud(uint8_t budId, bool ring, uint8_t opId) {
     const char onByte = ring ? '\x01' : '\x00';
-    if (profile.isOverEar) {
-        QByteArray p(2, '\x00');
-        p[0] = '\x06';
-        p[1] = onByte;
-        return {encode(kCmdWriteRingBuds, p, opId)};
+    if (budId == 0x05) {
+        // Legacy Ear (1) / TWS-all 1-byte format: [0x01] / [0x00]
+        return encode(kCmdWriteRingBuds, QByteArray(1, onByte), opId);
     }
-    QByteArray leftP(2, '\x00');
-    leftP[0] = '\x01';
-    leftP[1] = onByte;
-    QByteArray rightP(2, '\x00');
-    rightP[0] = '\x03';
-    rightP[1] = onByte;
+    QByteArray p(2, '\x00');
+    p[0] = static_cast<char>(budId);
+    p[1] = onByte;
+    return encode(kCmdWriteRingBuds, p, opId);
+}
+
+QList<QByteArray> buildSetRingBuds(bool ring, const ModelProfile& profile, uint8_t opId) {
+    if (profile.isLegacyRing) {
+        return {buildSetRingBud(0x05, ring, opId)};
+    }
+    if (profile.isOverEar) {
+        return {buildSetRingBud(0x06, ring, opId)};
+    }
+    // Standard Nothing / CMF TWS bud IDs: 0x02 = Left, 0x03 = Right
     return {
-        encode(kCmdWriteRingBuds, leftP, opId),
-        encode(kCmdWriteRingBuds, rightP, static_cast<uint8_t>(opId + 1)),
+        buildSetRingBud(0x02, ring, opId),
+        buildSetRingBud(0x03, ring, static_cast<uint8_t>(opId + 1)),
     };
 }
 

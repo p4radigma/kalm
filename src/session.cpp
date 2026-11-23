@@ -1030,20 +1030,33 @@ bool KalmSession::findEarbuds(bool ring) {
         nProf = m_nothingProfile;
     }
     if (proto == DeviceProtocol::NothingSpp) {
-        const auto pkts = nothing::buildSetRingBuds(ring, nProf, nextNothingOpId());
-        bool ok = false;
-        for (const QByteArray& pkt : pkts) {
-            ok = sendAndWaitNothing(
-                     pkt,
-                     [](const nothing::Packet& r) {
-                         return r.command == nothing::kAckRingBuds ||
-                                r.command == nothing::kRespRingBuds;
-                     },
-                     1500)
-                     .has_value() ||
-                 ok;
+        auto sendRingOne = [this](uint8_t budId, bool on) -> bool {
+            const uint8_t op = nextNothingOpId();
+            const QByteArray pkt = nothing::buildSetRingBud(budId, on, op);
+            return sendAndWaitNothing(
+                       pkt,
+                       [op](const nothing::Packet& r) {
+                           return (r.command == nothing::kAckRingBuds ||
+                                   r.command == nothing::kRespRingBuds) &&
+                                  (r.opId == op || r.opId == 0);
+                       },
+                       1000)
+                .has_value();
+        };
+
+        if (nProf.isLegacyRing) {
+            return sendRingOne(0x05, ring);
         }
-        return ok;
+        if (nProf.isOverEar) {
+            return sendRingOne(0x06, ring);
+        }
+
+        // Standard Nothing / CMF TWS: ring Left (0x02), pause briefly for TWS
+        // inter-bud relay, then ring Right (0x03).
+        const bool okLeft = sendRingOne(0x02, ring);
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        const bool okRight = sendRingOne(0x03, ring);
+        return okLeft || okRight;
     }
     if (proto != DeviceProtocol::VivoGaia) return false;
     return sendAndWait(
